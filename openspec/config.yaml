@@ -1,0 +1,20 @@
+schema: spec-driven
+
+context: |
+  这是 OIS 全局搜索与临床条件筛选的独立原型仓库。
+  前端 React/Umi，轻量本地接口 Node.js/TypeScript，搜索引擎 OpenSearch。
+  三个独立 PostgreSQL 原型库 pms_demo、emr_demo、rvs_demo 使用虚构数据。
+  核心关系是患者、具体诊断、计划申请单、治疗计划，按保存的 UUID 关联。
+  规划使用简体中文，代码标识符、路径、API 及 OpenSpec 关键字保留原文。
+  先完成需求、设计及任务，再实现；不把未执行的测试写为通过。
+
+rules:
+  proposal:
+    - 清楚描述目标、预期行为、影响范围和可观察的验收结果。
+  specs:
+    - 聚焦外部可观察行为，使用 Given/When/Then 场景。
+    - 不添加编号、未确认业务规则、文档治理说明或无关功能列表。
+  design:
+    - 说明数据来源、关联约束、查询规则、交互流程、更新及失败边界。
+  tasks:
+    - 分别列出实现、针对性验证、严格校验及实现完成后的归档任务。
