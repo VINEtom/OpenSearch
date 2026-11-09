@@ -20,7 +20,8 @@ test('S0 projects the documented 16 independent records and exact text matches',
   assert.deepEqual(ids('鼻咽癌'), ['D1', 'D3', 'R1', 'O1', 'O2', 'O3', 'O5'].map(idFor).sort());
   assert.equal(records.filter(row => row.radiotherapyNo === '000123').length, 8);
   assert.equal(records.filter(row => row.radiotherapyNo === '00123').length, 4);
-  assert.equal(records.find(row => row.sourceId === idFor('T2'))?.diagnosisId, idFor('D3'));
+  assert.deepEqual(records.find(row => row.sourceId === idFor('T2'))?.diagnosisIds, [idFor('D3')]);
+  assert.deepEqual(records.find(row => row.sourceId === idFor('R1'))?.diagnosisIds, [idFor('D1'), idFor('D2')].sort());
 });
 
 test('missing fields remain null, and a patient receives no clinical body or fabricated date', () => {
@@ -55,7 +56,8 @@ test('missing or cross-patient references fail validation even when the record i
   const mutations = [
     (snapshot: ReturnType<typeof baseline>) => { snapshot.treatmentPlans[0].plan_request_id = idFor('R99'); },
     (snapshot: ReturnType<typeof baseline>) => { snapshot.treatmentPlans[0].patient_id = idFor('P2'); },
-    (snapshot: ReturnType<typeof baseline>) => { snapshot.planRequests[0].diagnosis_id = idFor('D3'); },
+    (snapshot: ReturnType<typeof baseline>) => { snapshot.planRequests[0].diagnosis_ids = [idFor('D3')]; },
+    (snapshot: ReturnType<typeof baseline>) => { snapshot.planRequests[0].diagnosis_ids = []; },
     (snapshot: ReturnType<typeof baseline>) => { snapshot.diagnoses[0].source_document_id = idFor('O2'); },
     (snapshot: ReturnType<typeof baseline>) => { snapshot.documents[0].patient_id = idFor('P99'); },
   ];
@@ -95,7 +97,7 @@ test('details trace UUID relations, expose matching field names and never append
   assert.ok(diagnosis.relations.some(row => row.sourceId === idFor('O1') && row.recordType === 'document'));
   assert.deepEqual(diagnosis.relations.filter(row => row.recordType === 'treatment_plan').map(row => row.sourceId), [idFor('T1')]);
   const secondDiagnosis = detailFromSnapshot(snapshot, 'emr', 'diagnosis', idFor('D2'));
-  assert.deepEqual(secondDiagnosis.relations.filter(row => row.recordType === 'treatment_plan').map(row => [row.sourceId, row.availability]), [[idFor('T3'), 'voided']]);
+  assert.deepEqual(secondDiagnosis.relations.filter(row => row.recordType === 'treatment_plan').map(row => [row.sourceId, row.availability]), [[idFor('T1'), 'available'], [idFor('T3'), 'voided']]);
   const document = detailFromSnapshot(snapshot, 'emr', 'document', idFor('O1'));
   assert.ok(document.relations.some(row => row.sourceId === idFor('D1')));
   assert.equal(document.fields.find(field => field.name === 'documentType')?.value, '病理报告');

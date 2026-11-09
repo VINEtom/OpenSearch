@@ -1,5 +1,5 @@
 import React from 'react';
-import type { RecordType, Source } from '../../../shared/types';
+import { DOCUMENT_CATEGORIES, type RecordType, type SearchType, type Source } from '../../../shared/types';
 
 export const TYPE_LABELS: Record<RecordType, string> = {
   patient: '患者', diagnosis: '诊断', plan_request: '计划申请单', treatment_plan: '治疗计划', document: '其他单据',
@@ -8,6 +8,14 @@ export const TYPES: RecordType[] = ['patient', 'diagnosis', 'plan_request', 'tre
 export const TYPE_SOURCE: Record<RecordType, Source> = {
   patient: 'pms', diagnosis: 'emr', plan_request: 'emr', treatment_plan: 'rvs', document: 'emr',
 };
+export const SEARCH_CATEGORIES: { id: SearchType; label: string; source: Source }[] = [
+  { id: 'patient', label: '患者', source: 'pms' },
+  { id: 'diagnosis', label: '诊断', source: 'emr' },
+  ...DOCUMENT_CATEGORIES.map(name => ({ id: name, label: name, source: 'emr' as const })),
+];
+export function categoryLabel(type: string): string {
+  return SEARCH_CATEGORIES.find(item => item.id === type)?.label || TYPE_LABELS[type as RecordType] || type;
+}
 export const SEX_LABELS: Record<string, string> = { female: '女', male: '男', other: '其他', unknown: '未知' };
 export const CONFIRM_LABELS: Record<string, string> = { confirmed: '确诊', suspected: '疑似', refuted: '已排除', unknown: '未知' };
 

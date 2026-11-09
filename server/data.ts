@@ -1,7 +1,8 @@
 import pg from 'pg';
 import { config } from './config.js';
+import { fillJump } from './sources/jump.js';
 import { AppError } from './errors.js';
-import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type RecordDocument, type RecordType, type Relation, type Source } from '../shared/types.js';
+import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type RecordDocument, type RecordType, type Relation, type Source, type SourceDefect } from '../shared/types.js';
 
 export interface BaseRow {
   id: string;
@@ -28,18 +29,22 @@ export interface DiagnosisRow extends ClinicalRow {
   summary: string | null;
 }
 export interface PlanRequestRow extends ClinicalRow {
-  diagnosis_id: string;
-  request_no: string;
+  diagnosis_ids: string[];
+  request_no: string | null;
+  course_id?: string | null;
   title: string;
   body_text: string | null;
   requested_on: string | null;
   prescribed_fractions: number | null;
+  document_type?: string | null;
 }
 export interface DocumentRow extends ClinicalRow {
   document_type: string;
   title: string;
   body_text: string | null;
   document_on: string | null;
+  course_id?: string | null;
+  prescription_id?: string | null;
 }
 export interface TreatmentPlanRow extends ClinicalRow {
   plan_request_id: string;
@@ -56,6 +61,7 @@ export interface Snapshot {
   documents: DocumentRow[];
   treatmentPlans: TreatmentPlanRow[];
   readAt?: Record<Source, string>;
+  defects?: SourceDefect[];
 }
 type Row = PatientRow | DiagnosisRow | PlanRequestRow | DocumentRow | TreatmentPlanRow;
 const tables: Record<RecordType, string> = { patient: 'patients', diagnosis: 'diagnoses', plan_request: 'plan_requests', document: 'documents', treatment_plan: 'treatment_plans' };
@@ -95,7 +101,8 @@ export function getPool(source: Source): pg.Pool {
 export async function closePools(): Promise<void> {
   const current = [...pools.values()];
   pools.clear();
-  await Promise.all(current.map(pool => pool.end()));
+  const { closeRealPools } = await import('./sources/real.js');
+  await Promise.all([...current.map(pool => pool.end()), closeRealPools()]);
 }
 
 function normalizeRows<T extends Row>(rows: Record<string, unknown>[]): T[] {
@@ -103,6 +110,10 @@ function normalizeRows<T extends Row>(rows: Record<string, unknown>[]): T[] {
 }
 
 export async function readSnapshot(): Promise<Snapshot> {
+  if (config.sourceMode === 'real') {
+    const { readRealSnapshot } = await import('./sources/real.js');
+    return readRealSnapshot();
+  }
   assertPrototypeDatabases();
   const readAt = {} as Record<Source, string>;
   async function readSource(source: Source, names: string[]): Promise<Record<string, unknown>[][]> {
@@ -111,7 +122,15 @@ export async function readSnapshot(): Promise<Snapshot> {
       client = await getPool(source).connect();
       await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
       const result: Record<string, unknown>[][] = [];
-      for (const name of names) result.push((await client.query(`SELECT * FROM ${name} ORDER BY id`)).rows);
+      for (const name of names) {
+        const sql = name === 'plan_requests'
+          ? `SELECT request.id, request.created_at, request.updated_at, request.revision, request.deleted_at, request.voided_at,
+              request.patient_id, request.request_no, request.title, request.body_text, request.requested_on, request.prescribed_fractions,
+              COALESCE((SELECT array_agg(link.diagnosis_id ORDER BY link.diagnosis_id) FROM plan_request_diagnoses AS link WHERE link.plan_request_id = request.id), '{}') AS diagnosis_ids
+            FROM plan_requests AS request ORDER BY request.id`
+          : `SELECT * FROM ${name} ORDER BY id`;
+        result.push((await client.query(sql)).rows);
+      }
       await client.query('COMMIT');
       readAt[source] = new Date().toISOString();
       return result;
@@ -150,7 +169,7 @@ function checkTime(value: unknown, nullable: boolean, field: string): void {
 function checkText(value: unknown, field: string): void {
   if (value !== null && typeof value !== 'string') badData(`${field} 必须为文本或 NULL`);
 }
-function validateRow(type: RecordType, row: Row): void {
+function validateRow(type: RecordType, row: Row, real = false): void {
   const data = row as unknown as Record<string, unknown>;
   if (!uuid.test(row.id)) badData(`${type} 的 UUID 无效`);
   if (!Number.isSafeInteger(row.revision) || row.revision < 1) badData(`${type}:${row.id} 版本无效`);
@@ -163,7 +182,7 @@ function validateRow(type: RecordType, row: Row): void {
   }
   const required: Record<RecordType, string[]> = {
     patient: ['radiotherapy_no', 'name'], diagnosis: ['diagnosis_name'],
-    plan_request: ['request_no', 'title'], document: ['document_type', 'title'], treatment_plan: ['plan_no', 'name'],
+    plan_request: real ? ['title'] : ['request_no', 'title'], document: ['document_type', 'title'], treatment_plan: ['plan_no', 'name'],
   };
   for (const field of required[type]) if (!nonblank(data[field])) badData(`${type}:${row.id} 的 ${field} 不能为空`);
   const dateField = { patient: 'birth_date', diagnosis: 'diagnosed_on', plan_request: 'requested_on', document: 'document_on', treatment_plan: 'planned_on' }[type];
@@ -172,11 +191,15 @@ function validateRow(type: RecordType, row: Row): void {
   if (type === 'diagnosis') {
     if (!['confirmed', 'suspected', 'refuted', 'unknown'].includes(String(data.confirmation_status))) badData(`诊断 ${row.id} 确认状态无效`);
     const codes = [data.code_system, data.code_version, data.code];
-    if (!codes.every(value => value === null) && !codes.every(nonblank)) badData(`诊断 ${row.id} 编码必须成套填写`);
+    if (!real && !codes.every(value => value === null) && !codes.every(nonblank)) badData(`诊断 ${row.id} 编码必须成套填写`);
     if (data.source_document_id !== null && (typeof data.source_document_id !== 'string' || !uuid.test(data.source_document_id))) badData(`诊断 ${row.id} 来源单据 UUID 无效`);
     checkText(data.summary, 'summary');
   }
   if (type === 'plan_request') {
+    const diagnosisIds = (row as PlanRequestRow).diagnosis_ids;
+    if (!Array.isArray(diagnosisIds) || diagnosisIds.some(value => typeof value !== 'string' || !uuid.test(value)) || new Set(diagnosisIds).size !== diagnosisIds.length) {
+      badData(`申请单 ${row.id} 的关联诊断无效`);
+    }
     const fractions = (row as PlanRequestRow).prescribed_fractions;
     if (fractions !== null && (!Number.isInteger(fractions) || fractions < 1 || fractions > 2147483647)) badData('处方分次数必须为正整数或 NULL');
   }
@@ -202,17 +225,17 @@ function validateRelations(type: RecordType, row: Row, maps: ReturnType<typeof m
   if (type === 'patient') return;
   const patientId = (row as ClinicalRow).patient_id;
   if (!maps.patients.has(patientId)) badRelation(`所属患者不存在：${patientId}`);
-  let diagnosis: DiagnosisRow | undefined;
-  if (type === 'diagnosis') diagnosis = row as DiagnosisRow;
-  if (type === 'plan_request') diagnosis = requireRelation(maps.diagnoses, (row as PlanRequestRow).diagnosis_id, patientId, '关联诊断');
-  if (type === 'treatment_plan') {
-    const request = requireRelation(maps.requests, (row as TreatmentPlanRow).plan_request_id, patientId, '来源申请单');
-    diagnosis = requireRelation(maps.diagnoses, request.diagnosis_id, patientId, '关联诊断');
+  const diagnoses: DiagnosisRow[] = [];
+  if (type === 'diagnosis') diagnoses.push(row as DiagnosisRow);
+  if (type === 'plan_request' || type === 'treatment_plan') {
+    const request = type === 'plan_request' ? row as PlanRequestRow : requireRelation(maps.requests, (row as TreatmentPlanRow).plan_request_id, patientId, '来源申请单');
+    if (request.diagnosis_ids.length < 1) badRelation(`申请单没有关联具体诊断：${request.id}`);
+    for (const diagnosisId of request.diagnosis_ids) diagnoses.push(requireRelation(maps.diagnoses, diagnosisId, patientId, '关联诊断'));
   }
-  if (diagnosis?.source_document_id) requireRelation(maps.documents, diagnosis.source_document_id, patientId, '诊断来源单据');
+  for (const linked of diagnoses) if (linked.source_document_id) requireRelation(maps.documents, linked.source_document_id, patientId, '诊断来源单据');
 }
 
-export function validateSnapshot(snapshot: Snapshot): void {
+export function validateSnapshot(snapshot: Snapshot, options: { real?: boolean } = {}): void {
   const groups = rowsByType(snapshot);
   const maps = mapsFor(snapshot);
   for (const type of RECORD_TYPES) {
@@ -220,16 +243,17 @@ export function validateSnapshot(snapshot: Snapshot): void {
     for (const row of groups[type]) {
       if (seen.has(row.id)) badData(`${type} 重复 UUID：${row.id}`);
       seen.add(row.id);
-      validateRow(type, row);
+      validateRow(type, row, options.real);
       validateRelations(type, row, maps);
     }
   }
   for (const [rows, key] of [[snapshot.patients, 'radiotherapy_no'], [snapshot.planRequests, 'request_no'], [snapshot.treatmentPlans, 'plan_no']] as const) {
     const seen = new Set<string>();
     for (const row of rows) {
-      const value = (row as unknown as Record<string, string>)[key];
-      if (seen.has(value)) badData(`重复编号 ${key}：${value}`);
-      seen.add(value);
+      const value = (row as unknown as Record<string, string | null>)[key];
+      if (options.real && (value === null || value === '')) continue;
+      if (value !== null && seen.has(value)) badData(`重复编号 ${key}：${value}`);
+      if (value !== null) seen.add(value);
     }
   }
 }
@@ -247,7 +271,7 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
     patientId: patient.id, patientRevision: patient.revision, radiotherapyNo: patient.radiotherapy_no,
     patientName: patient.name, sex: patient.sex, birthDate: patient.birth_date,
     recordNo: null, title: '', bodyText: null, businessDate: null, updatedAt: new Date(row.updated_at).toISOString(),
-    diagnosisId: null, planRequestId: null, sourceDocumentId: null, confirmationStatus: null,
+    diagnosisIds: null, planRequestId: null, sourceDocumentId: null, confirmationStatus: null,
     planStatus: null, documentType: null, codeSystem: null, codeVersion: null, code: null, missingFields: [],
   };
   if (type === 'patient') document.title = patient.name;
@@ -260,7 +284,8 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
   if (type === 'plan_request') {
     const value = row as PlanRequestRow;
     Object.assign(document, { title: value.title, bodyText: value.body_text, recordNo: value.request_no,
-      businessDate: value.requested_on, diagnosisId: value.diagnosis_id, prescribedFractions: value.prescribed_fractions });
+      businessDate: value.requested_on, diagnosisIds: [...value.diagnosis_ids].sort(), prescribedFractions: value.prescribed_fractions,
+      documentType: value.document_type || '计划申请单' });
   }
   if (type === 'document') {
     const value = row as DocumentRow;
@@ -270,7 +295,7 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
     const value = row as TreatmentPlanRow;
     Object.assign(document, { title: value.name, bodyText: value.notes, recordNo: value.plan_no,
       businessDate: value.planned_on, planRequestId: value.plan_request_id, planStatus: value.status,
-      diagnosisId: snapshot.planRequests.find(request => request.id === value.plan_request_id)?.diagnosis_id ?? null });
+      diagnosisIds: [...(snapshot.planRequests.find(request => request.id === value.plan_request_id)?.diagnosis_ids ?? [])].sort() });
   }
   const expected: (keyof RecordDocument)[] = ['birthDate'];
   if (type !== 'patient') expected.push('businessDate', 'bodyText');
@@ -281,12 +306,14 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
 }
 
 export function projectRecords(snapshot: Snapshot, batchId: string): RecordDocument[] {
-  validateSnapshot(snapshot);
+  validateSnapshot(snapshot, { real: config.sourceMode === 'real' });
   const patients = new Map(snapshot.patients.map(row => [row.id, row]));
   const maxFractions = new Map<string, number>();
   for (const request of snapshot.planRequests) {
     if (availability(request) !== 'available' || request.prescribed_fractions === null) continue;
-    maxFractions.set(request.diagnosis_id, Math.max(maxFractions.get(request.diagnosis_id) ?? 0, request.prescribed_fractions));
+    for (const diagnosisId of request.diagnosis_ids) {
+      maxFractions.set(diagnosisId, Math.max(maxFractions.get(diagnosisId) ?? 0, request.prescribed_fractions));
+    }
   }
   const byPatient = new Map<string, NonNullable<RecordDocument['diagnosisFilters']>>();
   for (const diagnosis of snapshot.diagnoses) {
@@ -348,7 +375,7 @@ export function detailFromSnapshot(snapshot: Snapshot, source: Source, type: Rec
   if (patient.deleted_at) throw new AppError('PATIENT_DELETED', '所属患者已删除', 410);
   if (row.deleted_at) throw new AppError('DELETED', '记录已删除', 410);
   if ('voided_at' in row && row.voided_at) throw new AppError('VOIDED', '记录已作废', 410);
-  validateRow(type, row);
+  validateRow(type, row, config.sourceMode === 'real');
   validateRelations(type, row, maps);
   const record = projectRow(type, row, patient, 'live', snapshot);
   const relations: Relation[] = [];
@@ -367,13 +394,16 @@ export function detailFromSnapshot(snapshot: Snapshot, source: Source, type: Rec
   if (type !== 'patient') add('patient', patient, '所属患者');
   if (type === 'patient') {
     for (const childType of RECORD_TYPES.filter(value => value !== 'patient')) {
-      for (const child of groups[childType]) if ((child as ClinicalRow).patient_id === patientId) add(childType, child, { diagnosis: '诊断', plan_request: '计划申请单', treatment_plan: '治疗计划', document: '其他单据', patient: '' }[childType]);
+      for (const child of groups[childType]) if ((child as ClinicalRow).patient_id === patientId) {
+        const label = childType === 'plan_request' ? (child as PlanRequestRow).document_type || '计划申请单' : childType === 'document' ? (child as DocumentRow).document_type : childType === 'diagnosis' ? '诊断' : '治疗计划';
+        add(childType, child, label);
+      }
     }
   }
   if (type === 'diagnosis') {
     const diagnosis = row as DiagnosisRow;
     if (diagnosis.source_document_id) add('document', maps.documents.get(diagnosis.source_document_id)!, '来源单据');
-    for (const request of snapshot.planRequests.filter(value => value.diagnosis_id === id)) {
+    for (const request of snapshot.planRequests.filter(value => value.diagnosis_ids.includes(id))) {
       add('plan_request', request, '关联申请单');
       if (request.patient_id === patientId) {
         for (const plan of snapshot.treatmentPlans.filter(value => value.plan_request_id === request.id && value.patient_id === patientId)) {
@@ -383,16 +413,25 @@ export function detailFromSnapshot(snapshot: Snapshot, source: Source, type: Rec
     }
   }
   if (type === 'plan_request') {
-    add('diagnosis', maps.diagnoses.get((row as PlanRequestRow).diagnosis_id)!, '关联诊断');
+    for (const diagnosisId of (row as PlanRequestRow).diagnosis_ids) add('diagnosis', maps.diagnoses.get(diagnosisId)!, '关联诊断');
     for (const plan of snapshot.treatmentPlans.filter(value => value.plan_request_id === id)) add('treatment_plan', plan, '关联治疗计划');
   }
   if (type === 'treatment_plan') {
     const request = maps.requests.get((row as TreatmentPlanRow).plan_request_id)!;
     add('plan_request', request, '来源申请单');
-    add('diagnosis', maps.diagnoses.get(request.diagnosis_id)!, '关联诊断');
+    for (const diagnosisId of request.diagnosis_ids) add('diagnosis', maps.diagnoses.get(diagnosisId)!, '关联诊断');
   }
   if (type === 'document') for (const diagnosis of snapshot.diagnoses.filter(value => value.source_document_id === id)) add('diagnosis', diagnosis, '引用本单据的诊断');
-  return { record, patient: projectRow('patient', patient, patient, 'live', snapshot), fields: detailFields(record), relations };
+  return { record, patient: projectRow('patient', patient, patient, 'live', snapshot), fields: detailFields(record), relations, jumpUrl: jumpUrlFor(type, row, patientId) };
+}
+
+function jumpUrlFor(type: RecordType, row: Row, patientId: string): string | null {
+  if (config.sourceMode !== 'real') return null;
+  return fillJump(config.jump, type, type === 'document' ? (row as DocumentRow).document_type : '', {
+    sourceId: row.id, patientId,
+    courseId: 'course_id' in row ? row.course_id : null,
+    prescriptionId: 'prescription_id' in row ? row.prescription_id : null,
+  });
 }
 
 export async function loadDetail(source: Source, type: RecordType, id: string): Promise<DetailResponse> {

@@ -13,7 +13,7 @@ export const recordProperties = {
     name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
     maxPrescribedFractions: { type: 'integer' },
   } },
-  diagnosisId: { type: 'keyword' }, planRequestId: { type: 'keyword' }, sourceDocumentId: { type: 'keyword' },
+  diagnosisIds: { type: 'keyword' }, planRequestId: { type: 'keyword' }, sourceDocumentId: { type: 'keyword' },
   confirmationStatus: { type: 'keyword' }, planStatus: { type: 'keyword' },
   documentType: { type: 'text', analyzer: 'cjk', fields: { keyword: { type: 'keyword' }, han } },
   codeSystem: { type: 'keyword' }, codeVersion: { type: 'keyword' }, code: { type: 'keyword' }, missingFields: { type: 'keyword' },

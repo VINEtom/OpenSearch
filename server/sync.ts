@@ -39,7 +39,7 @@ async function acquireLock(): Promise<() => Promise<void>> {
 async function recordFailure(message: string, publicationBatchId?: string): Promise<void> {
   const previous = await readManifest();
   await writeManifest({
-    batchId: previous?.batchId || null, syncedAt: previous?.syncedAt || null, total: previous?.total ?? null,
+    batchId: previous?.batchId || null, syncedAt: previous?.syncedAt || null, total: previous?.total ?? null, defects: previous?.defects,
     lastAttempt: { status: 'failed', at: new Date().toISOString(), message, ...(publicationBatchId ? { publicationBatchId } : {}) },
   });
 }
@@ -56,14 +56,14 @@ export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatu
       await osRequest(`/${previous.index}/_mapping`, 'PUT', { _meta: { ...previous.meta, published: true } });
     }
     const snapshot = await readSnapshot();
-    validateSnapshot(snapshot);
+    validateSnapshot(snapshot, { real: config.sourceMode === 'real' });
     const batchId = `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
     newIndex = `${config.indexAlias}-${batchId}`;
     const records = projectRecords(snapshot, batchId);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, records.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
     let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: records.length, typeCounts, supportsPatientFilters: true, sourceReadAt: snapshot.readAt };
     await osRequest(`/${newIndex}`, 'PUT', {
-      settings: { number_of_shards: 1, number_of_replicas: 0 },
+      settings: { index: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '-1' } },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },
     });
     for (let offset = 0; offset < records.length; offset += 500) {
@@ -130,15 +130,22 @@ export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatu
     await osRequest(`/${newIndex}/_mapping`, 'PUT', {
       _meta: options.fault === 'publishedMetadata' ? 'injected-invalid-metadata' : { ...meta, published: true },
     });
+    await osRequest(`/${newIndex}/_settings`, 'PUT', { index: { blocks: { write: true } } }).catch(() => undefined);
+    const listed = await osRequest<Record<string, { mappings?: { _meta?: { owner?: string } } }>>(`/${config.indexAlias}-*/_mapping`).catch(() => ({}));
+    const keep = new Set([newIndex, previous?.index].filter((name): name is string => !!name));
+    for (const [name, body] of Object.entries(listed)) {
+      if (keep.has(name) || body.mappings?._meta?.owner !== INDEX_OWNER) continue;
+      await osRequest(`/${encodeURIComponent(name)}`, 'DELETE').catch(() => undefined);
+    }
     const lastAttempt = { status: 'success' as const, at: meta.syncedAt, message: `完整同步已发布，共 ${records.length} 条记录` };
     try {
       if (options.fault === 'manifest') throw new Error('Injected manifest write failure');
-      await writeManifest({ batchId, syncedAt: meta.syncedAt, total: records.length, lastAttempt });
+      await writeManifest({ batchId, syncedAt: meta.syncedAt, total: records.length, defects: snapshot.defects ?? [], lastAttempt });
     } catch {
       // The alias is authoritative; status reading can reconstruct the local manifest.
       return getIndexStatus();
     }
-    return { state: 'ready', batchId, syncedAt: meta.syncedAt, total: records.length, lastAttempt };
+    return { state: 'ready', sourceMode: config.sourceMode, batchId, syncedAt: meta.syncedAt, total: records.length, defects: snapshot.defects ?? [], lastAttempt };
   } catch (error) {
     const appError = error instanceof AppError ? error : new AppError('SYNC_FAILED', '同步失败，请检查原型数据源和搜索服务后重试。', 503);
     await recordFailure(appError.message, publicationBatchId).catch(() => {});

@@ -8,6 +8,9 @@ export const TYPE_LABELS: Record<RecordType, string> = {
 export const TYPE_SOURCES: Record<RecordType, Source> = {
   patient: 'pms', diagnosis: 'emr', plan_request: 'emr', treatment_plan: 'rvs', document: 'emr',
 };
+export const DOCUMENT_CATEGORIES = ['定位申请单', '复位申请单', '计划申请单', '后装申请单', '一站式申请单', '检查预约单', '全身放疗申请单', '治疗单', '自定义单据'] as const;
+export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
+export type SearchType = RecordType | 'all' | DocumentCategory;
 export interface RecordDocument {
   id: string;
   batchId: string;
@@ -28,7 +31,7 @@ export interface RecordDocument {
   bodyText: string | null;
   businessDate: string | null;
   updatedAt: string;
-  diagnosisId: string | null;
+  diagnosisIds: string[] | null;
   planRequestId: string | null;
   sourceDocumentId: string | null;
   confirmationStatus: string | null;
@@ -53,7 +56,7 @@ export interface SearchParams {
   scope?: 'all' | 'patient';
   patientId?: string;
   source?: Source | 'all';
-  type?: RecordType | 'all';
+  type?: SearchType;
   page?: number;
   batchId?: string;
 }
@@ -69,11 +72,12 @@ export interface SearchResponse {
   scope: 'all' | 'patient';
   patientId?: string;
   source: Source | 'all';
-  type: RecordType | 'all';
+  type: SearchType;
   page: number;
   pageSize: number;
   total: number;
   typeCounts: Record<RecordType, number>;
+  categoryCounts: Record<string, number>;
   batchId: string;
   syncedAt: string;
   hits: SearchHit[];
@@ -86,12 +90,19 @@ export interface SyncAttempt {
   // A failed attempt can be recovered only when this candidate is the active alias target.
   publicationBatchId?: string;
 }
+export interface SourceDefect {
+  recordType: 'diagnosis' | 'plan_request' | 'document';
+  sourceId: string;
+  reason: string;
+}
 export interface IndexStatus {
   state: 'ready' | 'not_synced' | 'unavailable';
+  sourceMode: 'demo' | 'real';
   batchId: string | null;
   syncedAt: string | null;
   total: number | null;
   lastAttempt: SyncAttempt | null;
+  defects?: SourceDefect[];
   warning?: string;
 }
 export interface Relation {
@@ -110,20 +121,6 @@ export interface DetailResponse {
   patient: RecordDocument;
   fields: DetailField[];
   relations: Relation[];
+  jumpUrl: string | null;
 }
 export interface ApiError { error: { code: string; message: string } }
-
-export interface DiagnosisPatientResponse {
-  q: string;
-  page: number;
-  batchId: string;
-  hasNext: boolean;
-  patients: {
-    patientId: string;
-    patientName: string;
-    radiotherapyNo: string;
-    diagnosisId: string;
-    diagnosisName: string;
-    diagnosedOn: string | null;
-  }[];
-}

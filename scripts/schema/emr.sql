@@ -51,23 +51,23 @@ CREATE TABLE IF NOT EXISTS plan_requests (
   deleted_at timestamptz,
   voided_at timestamptz,
   patient_id uuid NOT NULL,
-  diagnosis_id uuid NOT NULL,
   request_no text NOT NULL UNIQUE CHECK (btrim(request_no) <> ''),
   title text NOT NULL CHECK (btrim(title) <> ''),
   body_text text,
   requested_on date,
-  FOREIGN KEY (diagnosis_id, patient_id) REFERENCES diagnoses(id, patient_id) ON DELETE RESTRICT,
+  UNIQUE (id, patient_id),
   CHECK (updated_at >= created_at)
 );
 
 ALTER TABLE plan_requests ADD COLUMN IF NOT EXISTS prescribed_fractions integer
   CHECK (prescribed_fractions > 0);
+ALTER TABLE plan_requests ADD COLUMN IF NOT EXISTS document_type text
+  CHECK (document_type IS NULL OR btrim(document_type) <> '');
 
 CREATE INDEX IF NOT EXISTS documents_patient_idx ON documents(patient_id);
 CREATE INDEX IF NOT EXISTS diagnoses_patient_idx ON diagnoses(patient_id);
 CREATE INDEX IF NOT EXISTS diagnoses_source_document_idx ON diagnoses(source_document_id, patient_id);
 CREATE INDEX IF NOT EXISTS plan_requests_patient_idx ON plan_requests(patient_id);
-CREATE INDEX IF NOT EXISTS plan_requests_diagnosis_idx ON plan_requests(diagnosis_id, patient_id);
 
 CREATE OR REPLACE TRIGGER documents_version BEFORE UPDATE ON documents
 FOR EACH ROW EXECUTE FUNCTION maintain_record_version();

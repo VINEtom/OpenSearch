@@ -20,7 +20,7 @@ export interface IndexMeta {
   sourceReadAt?: Partial<Record<Source, string>>;
 }
 export interface ActiveBatch { index: string; meta: IndexMeta }
-interface Manifest { batchId: string | null; syncedAt: string | null; total: number | null; lastAttempt: SyncAttempt | null }
+interface Manifest { batchId: string | null; syncedAt: string | null; total: number | null; defects?: IndexStatus['defects']; lastAttempt: SyncAttempt | null }
 
 export async function readManifest(): Promise<Manifest | null> {
   try { return JSON.parse(await readFile(path.join(config.runtimeDir, 'sync-state.json'), 'utf8')) as Manifest; }
@@ -79,7 +79,7 @@ export async function getIndexStatus(): Promise<IndexStatus> {
   const manifest = await readManifest();
   try {
     const current = await activeBatch();
-    if (!current) return { state: 'not_synced', batchId: null, syncedAt: null, total: null, lastAttempt: manifest?.lastAttempt || null };
+    if (!current) return { state: 'not_synced', sourceMode: config.sourceMode, batchId: null, syncedAt: null, total: null, defects: manifest?.defects, lastAttempt: manifest?.lastAttempt || null };
     const { batchId, syncedAt, total } = current.meta;
     const recoveredPublication = manifest?.lastAttempt?.status === 'failed'
       && manifest.lastAttempt.publicationBatchId === batchId;
@@ -88,11 +88,11 @@ export async function getIndexStatus(): Promise<IndexStatus> {
       : { status: 'success' as const, at: syncedAt, message: '完整同步已发布' };
     let warning: string | undefined;
     if (manifest?.batchId !== batchId || recoveredPublication) {
-      try { await writeManifest({ batchId, syncedAt, total, lastAttempt }); }
+      try { await writeManifest({ batchId, syncedAt, total, defects: manifest?.defects, lastAttempt }); }
       catch { warning = '搜索数据已发布，但本地同步记录暂时无法保存。'; }
     }
-    return { state: 'ready', batchId, syncedAt, total, lastAttempt, ...(warning ? { warning } : {}) };
+    return { state: 'ready', sourceMode: config.sourceMode, batchId, syncedAt, total, defects: manifest?.defects, lastAttempt, ...(warning ? { warning } : {}) };
   } catch {
-    return { state: 'unavailable', batchId: null, syncedAt: null, total: null, lastAttempt: manifest?.lastAttempt || null, warning: '无法读取搜索服务状态，请检查本地服务后重试。' };
+    return { state: 'unavailable', sourceMode: config.sourceMode, batchId: null, syncedAt: null, total: null, defects: manifest?.defects, lastAttempt: manifest?.lastAttempt || null, warning: '无法读取搜索服务状态，请检查本地服务后重试。' };
   }
 }

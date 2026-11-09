@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type Source } from '../shared/types.js';
+import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type Source } from '../shared/types.js';
 import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { parsePatientQuery } from './patient-query.js';
@@ -7,7 +7,8 @@ import { osRequest } from './opensearch.js';
 
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const allowedParams = new Set(['q', 'scope', 'patientId', 'source', 'type', 'page', 'batchId']);
-export type NormalizedSearch = Required<Pick<SearchParams, 'q' | 'scope' | 'source' | 'type' | 'page'>> & Pick<SearchParams, 'patientId' | 'batchId'>;
+const documentCategories = new Set<string>(DOCUMENT_CATEGORIES);
+export type NormalizedSearch = Required<Pick<SearchParams, 'q' | 'scope' | 'source' | 'page'>> & { type: SearchType } & Pick<SearchParams, 'patientId' | 'batchId'>;
 
 export function validateSearchParams(input: Record<string, unknown>): NormalizedSearch {
   for (const key of Object.keys(input)) if (!allowedParams.has(key)) throw new AppError('INVALID_QUERY', '查询包含不支持的参数。');
@@ -21,15 +22,17 @@ export function validateSearchParams(input: Record<string, unknown>): Normalized
   const type = input.type ?? 'all';
   if (scope !== 'all' && scope !== 'patient') throw new AppError('INVALID_QUERY', '患者范围不正确。');
   if (source !== 'all' && !SOURCES.includes(source as Source)) throw new AppError('INVALID_QUERY', '数据来源不正确。');
-  if (type !== 'all' && !RECORD_TYPES.includes(type as RecordType)) throw new AppError('INVALID_QUERY', '对象类型不正确。');
-  if (source !== 'all' && type !== 'all' && TYPE_SOURCES[type as RecordType] !== source) throw new AppError('INVALID_QUERY', '该来源不包含所选对象类型。');
+  const category = documentCategories.has(String(type));
+  if (type !== 'all' && !category && !RECORD_TYPES.includes(type as RecordType)) throw new AppError('INVALID_QUERY', '对象类型不正确。');
+  const typeSource = category ? 'emr' : type === 'all' ? null : TYPE_SOURCES[type as RecordType];
+  if (source !== 'all' && typeSource && typeSource !== source) throw new AppError('INVALID_QUERY', '该来源不包含所选对象类型。');
   const patientId = scope === 'patient' ? String(input.patientId || '').toLowerCase() : undefined;
   if (scope === 'patient' && !UUID_PATTERN.test(patientId!)) throw new AppError('INVALID_QUERY', '请先选择当前患者。');
   const page = input.page === undefined ? 1 : Number(input.page);
   if (!Number.isInteger(page) || page < 1 || page > 500) throw new AppError('INVALID_QUERY', '页码不正确；请在前 10000 条结果内查看，或缩小范围。');
   const batchId = input.batchId as string | undefined;
   if (batchId !== undefined && !BATCH_PATTERN.test(batchId)) throw new AppError('BATCH_UNAVAILABLE', '原查询批次已不可用，请重新查询。', 409);
-  return { q, scope, source: source as Source | 'all', type: type as RecordType | 'all', page, ...(patientId ? { patientId } : {}), ...(batchId ? { batchId } : {}) };
+  return { q, scope, source: source as Source | 'all', type: type as SearchType, page, ...(patientId ? { patientId } : {}), ...(batchId ? { batchId } : {}) };
 }
 
 const textFields = {
@@ -58,8 +61,11 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
     size: 20,
     track_total_hits: true,
     _source: { excludes: ['diagnosisFilters'] },
-    ...(params.type === 'all' ? {} : { post_filter: { term: { recordType: params.type } } }),
-    aggs: { types: { terms: { field: 'recordType', size: RECORD_TYPES.length } } },
+    ...(params.type === 'all' ? {} : { post_filter: documentCategories.has(params.type) ? { term: { 'documentType.keyword': params.type } } : { term: { recordType: params.type } } }),
+    aggs: {
+      types: { terms: { field: 'recordType', size: RECORD_TYPES.length } },
+      documentTypes: { terms: { field: 'documentType.keyword', size: 30 } },
+    },
   };
   if (patientFilters) {
     const { diagnosis, diagnosedFrom, diagnosedThrough, minimumFractions } = patientFilters;
@@ -132,7 +138,7 @@ interface EngineResponse {
   timed_out?: boolean;
   _shards: { failed: number };
   hits: { total: { value: number; relation: string }; hits: { _source: RecordDocument; highlight?: Record<string, string[]> }[] };
-  aggregations: { types: { buckets: { key: RecordType; doc_count: number }[] } };
+  aggregations: { types: { buckets: { key: RecordType; doc_count: number }[] }; documentTypes?: { buckets: { key: string; doc_count: number }[] } };
 }
 
 export function assertCompleteResponse(response: Pick<EngineResponse, 'timed_out' | '_shards' | 'hits'>): void {
@@ -157,6 +163,8 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
+    const categoryCounts: Record<string, number> = { patient: typeCounts.patient, diagnosis: typeCounts.diagnosis };
+    for (const bucket of response.aggregations.documentTypes?.buckets ?? []) categoryCounts[bucket.key] = bucket.doc_count;
     const hits = response.hits.hits.map(hit => {
       const record = hit._source;
       const matchedFields: MatchField[] = [];
@@ -173,7 +181,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       }
       return { ...record, matchedFields };
     });
-    return { ...params, ...(patientFilters ? { patientFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits, elapsedMs: Math.round(performance.now() - started) };
+    return { ...params, ...(patientFilters ? { patientFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits, elapsedMs: Math.round(performance.now() - started) };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('SEARCH_UNAVAILABLE', '搜索服务暂时不可用，请检查本地服务后重试。', 503);

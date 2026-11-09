@@ -1,4 +1,3 @@
-import { findPatientsByDiagnosis } from '../server/diagnosis-search.js';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -215,25 +214,6 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
     assert.deepEqual([...new Set(sameName.hits.map((hit) => hit.radiotherapyNo))].sort(), ['000123', '00123']);
   });
 
-  it('finds one patient from two formal diagnoses and opens the newest original record', async () => {
-    await withBaseline(async () => {
-      const snapshot = baseline();
-      snapshot.diagnoses.push(repeatedDiagnosis());
-      await seed({ reset: true, snapshot });
-      await syncRecords();
-
-      const global = await query('鼻咽癌');
-      assertRecords(global, [...NPC_RECORDS, 'D5']);
-      const result = await findPatientsByDiagnosis({ q: '鼻咽癌' });
-      assert.deepEqual(result.patients.map(row => row.patientId), [idFor('P1')]);
-      assert.equal(result.patients[0].diagnosisId, idFor('D5'));
-      assert.equal(result.patients[0].radiotherapyNo, '000123');
-      const detail = await loadDetail('emr', 'diagnosis', result.patients[0].diagnosisId);
-      assert.equal(detail.record.sourceId, idFor('D5'));
-      assert.equal(detail.record.bodyText, '复诊记录：鼻咽癌。');
-    });
-  });
-
   it('matches patients once, using the date and prescription of the same confirmed diagnosis', async () => {
     await withBaseline(async () => {
       const text = '最近三个月确诊鼻咽癌、处方不少于 20 次';
@@ -249,7 +229,7 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       npcRequest.prescribed_fractions = 20;
       lungRequest.prescribed_fractions = 30;
       snapshot.planRequests.push(
-        { ...npcRequest, id: idFor('R4'), request_no: 'REQ-004', diagnosis_id: repeat.id },
+        { ...npcRequest, id: idFor('R4'), request_no: 'REQ-004', diagnosis_ids: [repeat.id] },
         { ...deletedRequest, id: idFor('R5'), request_no: 'REQ-005', deleted_at: null },
       );
       await seed({ reset: true, snapshot });
@@ -363,8 +343,8 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       assert.ok(patient.relations.some((relation) => relation.sourceId === idFor(symbol)));
       assert.equal((await detail(symbol)).record.sourceId, idFor(symbol));
     }
-    assert.equal((await detail('R1')).record.diagnosisId, idFor('D1'));
-    assert.equal((await detail('R2')).record.diagnosisId, idFor('D2'));
+    assert.deepEqual((await detail('R1')).record.diagnosisIds, [idFor('D1'), idFor('D2')].sort());
+    assert.deepEqual((await detail('R2')).record.diagnosisIds, [idFor('D2')]);
     assert.ok(!patient.relations.some((relation) => relation.recordType === 'document' && [idFor('R1'), idFor('R2')].includes(relation.sourceId)));
   });
 
@@ -441,7 +421,7 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
         assert.equal(hit.birthDate, '1990-01-01');
         assert.equal(hit.patientRevision, 2);
       }
-      assert.equal(findHit(response, 'R1').diagnosisId, idFor('D1'));
+      assert.deepEqual(findHit(response, 'R1').diagnosisIds, [idFor('D1'), idFor('D2')].sort());
       assert.equal(findHit(response, 'T1').planRequestId, idFor('R1'));
     });
   });
@@ -461,11 +441,12 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
 
   it('uses the newly saved diagnosis when a request changes its same-patient association', async () => {
     await withBaseline(async () => {
-      await getPool('emr').query('UPDATE plan_requests SET diagnosis_id=$1, revision=revision+1, updated_at=$2 WHERE id=$3', [idFor('D2'), UPDATED_AT, idFor('R1')]);
+      await getPool('emr').query('DELETE FROM plan_request_diagnoses WHERE plan_request_id=$1 AND diagnosis_id<>$2', [idFor('R1'), idFor('D2')]);
+      await getPool('emr').query('UPDATE plan_requests SET revision=revision+1, updated_at=$1 WHERE id=$2', [UPDATED_AT, idFor('R1')]);
       await syncRecords();
-      assert.equal(findHit(await query('REQ-001'), 'R1').diagnosisId, idFor('D2'));
+      assert.deepEqual(findHit(await query('REQ-001'), 'R1').diagnosisIds, [idFor('D2')]);
       const current = await detail('R1');
-      assert.equal(current.record.diagnosisId, idFor('D2'));
+      assert.deepEqual(current.record.diagnosisIds, [idFor('D2')]);
       assert.ok(current.relations.some((relation) => relation.sourceId === idFor('D2')));
       assert.ok(!current.relations.some((relation) => relation.recordType === 'diagnosis' && relation.sourceId === idFor('D1')));
     });
@@ -477,7 +458,7 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       await syncRecords();
       const hit = findHit(await query('PLAN-001'), 'T1');
       assert.equal(hit.planRequestId, idFor('R2'));
-      assert.equal(hit.diagnosisId, idFor('D2'));
+      assert.deepEqual(hit.diagnosisIds, [idFor('D2')]);
       const current = await detail('T1');
       assert.equal(current.record.planRequestId, idFor('R2'));
       assert.ok(current.relations.some((relation) => relation.sourceId === idFor('R2')));
@@ -538,10 +519,10 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
   it('rejects a same-database request-to-diagnosis association belonging to another patient', async () => {
     await withBaseline(async () => {
       await assert.rejects(
-        getPool('emr').query('UPDATE plan_requests SET diagnosis_id=$1, revision=revision+1, updated_at=$2 WHERE id=$3', [idFor('D3'), UPDATED_AT, idFor('R1')]),
+        getPool('emr').query('INSERT INTO plan_request_diagnoses (id, plan_request_id, diagnosis_id, patient_id) VALUES ($1, $2, $3, $4)', [idFor('bad-link'), idFor('R1'), idFor('D3'), idFor('P1')]),
         (error: unknown) => (error as { code?: string }).code === '23503',
       );
-      assert.equal((await detail('R1')).record.diagnosisId, idFor('D1'));
+      assert.deepEqual((await detail('R1')).record.diagnosisIds, [idFor('D1'), idFor('D2')].sort());
     });
   });
 

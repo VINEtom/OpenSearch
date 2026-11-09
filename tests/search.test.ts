@@ -16,6 +16,9 @@ test('leading zero identifiers are retained and scope filters do not include obj
   assert.equal(params.q, '000123');
   assert.deepEqual(query.query.bool.filter, [{ term: { source: 'emr' } }]);
   assert.deepEqual(query.post_filter, { term: { recordType: 'document' } });
+  const category = buildSearchQuery(validateSearchParams({ q: '定位', type: '定位申请单' }), 'OPEN', 'CLOSE');
+  assert.deepEqual(category.post_filter, { term: { 'documentType.keyword': '定位申请单' } });
+  assert.throws(() => validateSearchParams({ q: '定位', source: 'pms', type: '定位申请单' }));
   assert.equal(query.track_total_hits, true);
 });
 test('highlight conversion preserves unsafe-looking text as literal text and computes UTF-16 ranges', () => {

@@ -89,7 +89,12 @@ export default function DetailView({ frame, depth, query, syncedAt, onOpen, onBa
   }, [loading, detail, frame.key]);
 
   const snapshot = frame.hit;
-  const relationChanged = !!(detail && snapshot && (detail.record.diagnosisId !== snapshot.diagnosisId
+  const sameIds = (left: string[] | null | undefined, right: string[] | null | undefined) => {
+    const first = left ?? [];
+    const second = right ?? [];
+    return first.length === second.length && first.every((value, index) => value === second[index]);
+  };
+  const relationChanged = !!(detail && snapshot && (!sameIds(detail.record.diagnosisIds, snapshot.diagnosisIds)
     || detail.record.planRequestId !== snapshot.planRequestId || detail.record.sourceDocumentId !== snapshot.sourceDocumentId));
   const changed = !!(detail && snapshot && (
     detail.record.sourceRevision !== snapshot.sourceRevision || detail.patient.sourceRevision !== snapshot.patientRevision
@@ -130,6 +135,7 @@ export default function DetailView({ frame, depth, query, syncedAt, onOpen, onBa
         <div className="patient-identity"><div className="eyebrow">{target.recordType === 'patient' ? '患者资料' : '所属患者'}{changed && <span className="patient-change">内容已更新 · 与搜索时不同</span>}</div><h2 data-matched={matchNames.has('patientName') || (target.recordType === 'patient' && matchNames.has('title'))}>{target.recordType === 'patient' ? <span className="patient-title">{highlight('patientName', detail.patient.patientName)}</span> : <button className="patient-title" onClick={() => onOpen({ source: 'pms', recordType: 'patient', sourceId: detail.patient.patientId, patientId: detail.patient.patientId, title: detail.patient.patientName, patientName: detail.patient.patientName, radiotherapyNo: detail.patient.radiotherapyNo })}>{highlight('patientName', detail.patient.patientName)}</button>}<span className="identity-meta">{SEX_LABELS[detail.patient.sex] || detail.patient.sex} · {detail.patient.birthDate || '出生日期未知'}</span></h2></div>
         <div className="patient-number" data-matched={matchNames.has('radiotherapyNo')}><span>放疗号</span><strong>{highlight('radiotherapyNo', detail.patient.radiotherapyNo)}</strong></div>
         <button className="secondary-button" onClick={() => onScope(detail.patient)}><Icon name="search" size={16} />在此患者范围搜索</button>
+        {detail.jumpUrl && <a className="secondary-button" href={detail.jumpUrl} target="_blank" rel="noreferrer">跳转</a>}
       </section>
 
       <div className="detail-columns">

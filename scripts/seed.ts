@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import type pg from 'pg';
-import { baseline, paginationDocuments } from '../fixtures/samples.js';
+import { baseline, idFor, paginationDocuments } from '../fixtures/samples.js';
 import { assertPrototypeDatabases, closePools, getPool, validateSnapshot, type Snapshot } from '../server/data.js';
 import { AppError } from '../server/errors.js';
 import { SOURCES, type Source } from '../shared/types.js';
@@ -12,7 +12,7 @@ export async function seed({ reset = false, snapshot = baseline() }: SeedOptions
   validateSnapshot(snapshot);
   const clients = new Map<Source, pg.PoolClient>();
   const tableNames: Record<Source, string[]> = {
-    pms: ['patients'], emr: ['plan_requests', 'diagnoses', 'documents'], rvs: ['treatment_plans'],
+    pms: ['patients'], emr: ['plan_request_diagnoses', 'plan_requests', 'diagnoses', 'documents'], rvs: ['treatment_plans'],
   };
   try {
     for (const source of SOURCES) {
@@ -39,7 +39,7 @@ export async function seed({ reset = false, snapshot = baseline() }: SeedOptions
         patients: [...common, 'radiotherapy_no', 'name', 'sex', 'birth_date'],
         documents: [...clinical, 'document_type', 'title', 'body_text', 'document_on'],
         diagnoses: [...clinical, 'diagnosis_name', 'code_system', 'code_version', 'code', 'confirmation_status', 'diagnosed_on', 'source_document_id', 'summary'],
-        plan_requests: [...clinical, 'diagnosis_id', 'request_no', 'title', 'body_text', 'requested_on', 'prescribed_fractions'],
+        plan_requests: [...clinical, 'request_no', 'title', 'body_text', 'requested_on', 'prescribed_fractions', 'document_type'],
         treatment_plans: [...clinical, 'plan_request_id', 'plan_no', 'name', 'status', 'notes', 'planned_on'],
       };
       const columns = columnsByTable[table];
@@ -52,6 +52,15 @@ export async function seed({ reset = false, snapshot = baseline() }: SeedOptions
     await insert('emr', 'documents', snapshot.documents);
     await insert('emr', 'diagnoses', snapshot.diagnoses);
     await insert('emr', 'plan_requests', snapshot.planRequests);
+    const emr = clients.get('emr')!;
+    for (const request of snapshot.planRequests) {
+      for (const diagnosisId of [...request.diagnosis_ids].sort()) {
+        await emr.query(
+          'INSERT INTO plan_request_diagnoses (id, plan_request_id, diagnosis_id, patient_id) VALUES ($1, $2, $3, $4)',
+          [idFor(`link:${request.id}:${diagnosisId}`), request.id, diagnosisId, request.patient_id],
+        );
+      }
+    }
     await insert('rvs', 'treatment_plans', snapshot.treatmentPlans);
     // Separate databases have separate transactions; a connection failure may require a reset/retry.
     for (const source of SOURCES) await clients.get(source)!.query('COMMIT');

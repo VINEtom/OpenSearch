@@ -1,5 +1,4 @@
 import express from 'express';
-import { findPatientsByDiagnosis } from './diagnosis-search.js';
 import { config } from './config.js';
 import { AppError } from './errors.js';
 import { getIndexStatus } from './index-state.js';
@@ -14,9 +13,6 @@ app.get('/api/prototype/health', (_req, res) => { res.json({ ok: true, app: 'ois
 app.get('/api/prototype/index-status', async (_req, res) => { res.json(await getIndexStatus()); });
 app.get('/api/prototype/search', async (req, res) => {
   res.json(await searchRecords(validateSearchParams(req.query as Record<string, unknown>)));
-});
-app.get('/api/prototype/diagnosis-patients', async (req, res) => {
-  res.json(await findPatientsByDiagnosis(req.query));
 });
 function checkId(value: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw new AppError('INVALID_QUERY', '记录标识格式不正确。');

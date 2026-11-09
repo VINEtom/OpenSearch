@@ -25,12 +25,18 @@ docker --context colima-ois-search compose ps
 
 在其他机器上，使用已启动的 Docker context 运行 `npm run infra:up` 即可。Compose 启动 PostgreSQL 16.11 和 OpenSearch 3.9.0，并等待两个服务健康。
 
-首次创建并导入样例：
+首次创建并导入基线样例：
 
 ```sh
 npm run db:init
 npm run db:seed
 npm run sync
+```
+
+一键重建模拟数据。这条命令只写入本机 `pms_demo`、`emr_demo`、`rvs_demo`，然后同步到本机 OpenSearch。数据是虚构的，覆盖患者、诊断，以及定位、复位、计划、后装、一站式、检查预约、全身放疗、治疗单和自定义单据。它会清掉演示库里的旧样例，并用这批模拟数据替换当前搜索结果：
+
+```sh
+npm run demo:data
 ```
 
 `db:init` 可重复执行，会保留已有记录。`db:seed` 仅向空库导入，已有记录时明确拒绝覆盖。本机已经完成初始化和同步，日常启动可直接执行：
