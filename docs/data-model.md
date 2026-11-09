@@ -1,8 +1,8 @@
 # OIS 搜索原型数据模型
 
-原型用三个独立 PostgreSQL 数据库保存虚构的患者、诊断、计划申请单、其他单据和治疗计划，再生成用于记录搜索与患者条件筛选的两套 OpenSearch 数据。
+原型用三个独立 PostgreSQL 数据库保存虚构的患者、诊断、计划申请单、其他单据和治疗计划，再生成用于全局搜索的 OpenSearch 记录索引。
 
-本文是表结构和索引设计，尚未执行建库、建表或数据导入。业务条件见[需求](./requirements.md)，查询与回源流程见[交互流程](./interaction-flows.md)，验证场景见[测试用例](./test-cases.md)。
+表结构由 `scripts/schema/` 实现，索引映射由 `server/mapping.ts` 实现。业务条件见[需求](./requirements.md)，查询与回源流程见[交互流程](./interaction-flows.md)，验证场景见[测试用例](./test-cases.md)。
 
 ## 数据库与关系
 
@@ -45,7 +45,7 @@ erDiagram
 
 记录可用的统一条件为：`deleted_at IS NULL`，且该表有 `voided_at` 时还需 `voided_at IS NULL`。确认状态与计划状态不替代这个条件：例如诊断已排除，应记录 `confirmation_status = refuted`，不等于删除或作废。
 
-软删除和作废保留源记录及关系，不级联修改子记录。临床关系判断只使用整条链均可用的“患者 → 诊断 → 申请单 → 计划”。父级失效后，对应链退出判断；恢复后由下一次完整同步重新计算。
+软删除和作废保留源记录及关系，不级联修改子记录。可用患者下的源记录按自身可用性独立参与搜索；关联的诊断或申请单失效时，保留关联 UUID，打开目标时提示不可用，不拼接该目标正文。患者删除后，其全部记录退出搜索；恢复后由下一次完整同步重新检查可用性。
 
 源表中的业务日期使用 `date`，不附加虚构时分秒；创建、修改和失效时间使用 `timestamptz`。可空字段的缺失值保存为 `NULL`，不写入 `0`、空日期或“未知”等替代值。枚举中的 `unknown` 是明确的未知状态。
 
@@ -56,11 +56,11 @@ erDiagram
 | `radiotherapy_no` | `text` | 是 | 放疗号；非空、全表唯一；作为文本保存，保留前导零 |
 | `name` | `text` | 是 | 患者姓名；不得为空白 |
 | `sex` | `patient_sex` | 是 | 枚举：`female`、`male`、`other`、`unknown`；缺失时使用 `unknown` |
-| `birth_date` | `date` | 否 | 出生日期；未知时为空，不另设固定年龄列 |
+| `birth_date` | `date` | 否 | 出生日期；未知时为空 |
 
 `patient_sex` 在 `pms_demo` 中定义。放疗号仅用于业务查询和展示，跨库关系统一使用患者 UUID。修改放疗号不会改变患者身份或关联关系。
 
-年龄按筛选当天计算周岁，查询参考日期、边界和缺失值行为按[需求中的年龄规则](./requirements.md)执行。源表与搜索索引均不保存会随日期失效的固定年龄。
+性别和出生日期用于患者身份展示；未知出生日期保持为空。
 
 ## 诊断表 `emr_demo.diagnoses`
 
@@ -79,7 +79,7 @@ erDiagram
 
 `diagnosis_confirmation_status` 在 `emr_demo` 中定义。编码三项必须同时为空，或同时为非空白文本；不能仅凭编码名称猜测体系或版本。未提供编码的诊断仍可按规范名称查询。
 
-同一患者可以有多条诊断，每条诊断以自己的 UUID 区分。名称或编码相同不代表同一条诊断，不通过名称合并关系。确认状态在临床筛选中的含义按[需求](./requirements.md)执行。
+同一患者可以有多条诊断，每条诊断以自己的 UUID 区分。名称或编码相同不代表同一条诊断，不通过名称合并关系。搜索结果和详情按来源保存的确认状态展示，不由正文命中推断状态。
 
 来源单据属于可选证据关系，不是诊断的替代标识。来源单据失效不会自动改写诊断确认状态；回源时不展示不可用单据正文。
 
@@ -102,7 +102,7 @@ erDiagram
 | 字段 | PostgreSQL 类型 | 必填 | 含义与约束 |
 | --- | --- | --- | --- |
 | `patient_id` | `uuid` | 是 | 所属患者；跨库指向 `patients.id` |
-| `document_type` | `text` | 是 | 单据类型名称或类型值；不得为空白，用于筛选和展示 |
+| `document_type` | `text` | 是 | 单据类型名称或类型值；不得为空白，用于搜索和展示 |
 | `title` | `text` | 是 | 单据标题；不得为空白 |
 | `body_text` | `text` | 否 | 可搜索的纯文本正文；空值表示未提供正文 |
 | `document_on` | `date` | 否 | 单据业务日期 |
@@ -118,12 +118,12 @@ erDiagram
 | `plan_request_id` | `uuid` | 是 | 对应计划申请单；跨库指向 `emr_demo.plan_requests.id` |
 | `plan_no` | `text` | 是 | 治疗计划编号；非空、全表唯一，保留前导零 |
 | `name` | `text` | 是 | 治疗计划名称；不得为空白 |
-| `status` | `text` | 否 | 来源计划状态，仅供展示；不据此推断审批、治疗执行或有效计划数量 |
+| `status` | `text` | 否 | 来源计划状态，仅供展示，不据此推断治疗执行情况 |
 | `notes` | `text` | 否 | 治疗备注或计划说明正文 |
 | `planned_on` | `date` | 否 | 计划业务日期 |
 | `voided_at` | `timestamptz` | 否 | 作废时间 |
 
-“有计划”“无计划”的患者筛选语义和多诊断条件组合按[需求](./requirements.md)执行。模型只提供具体诊断下的申请单与可用计划集合，不用患者名下任意计划替代该诊断对应的计划。
+详情按保存的 UUID 追溯来源申请单及具体诊断；不能打开患者名下另一张申请单来替代缺失或失效的目标。
 
 ## 约束与 PostgreSQL 索引
 
@@ -185,91 +185,44 @@ erDiagram
 | `updatedAt` | `date` | 本对象源记录的 `updated_at` |
 | `diagnosisId`、`planRequestId`、`sourceDocumentId` | `keyword` | 适用时保存结构化关联 UUID，其他类型为空 |
 | `confirmationStatus`、`planStatus` | `keyword` | 相应对象的状态 |
-| `documentType` | `text`，附 `keyword` 子字段 | 可搜索的单据类型名称，精确值用于展示和条件比较 |
+| `documentType` | `text`，附 `keyword` 子字段 | 可搜索的单据类型名称，精确值用于展示 |
 | `codeSystem`、`codeVersion`、`code` | `keyword` | 诊断编码三项，适用时填写 |
 | `missingFields` | `keyword` 数组 | 本类型应展示但缺失的字段，如 `birthDate`、`businessDate`、`bodyText` |
 
 `title` 对应患者姓名、诊断规范名、申请单标题、单据标题或计划名称；`bodyText` 对应诊断 `summary`、申请单或单据 `body_text`、计划 `notes`。患者结果不生成虚构的临床正文。
 
-`title`、`patientName`、`bodyText`、`documentType` 以及患者投影中的 `diagnosisName` 使用 OpenSearch 内置 `cjk` 分析器作为原型的中文文本检索基线。放疗号、申请单编号、计划编号和编码使用 `keyword` 精确匹配；不把编号交给中文分词。临床诊断按选项的匹配方式精确比较：名称选项匹配 `diagnosisName.keyword`，编码选项匹配编码三项；分词不参与该条件的判断。名称匹配不要求记录同时具备编码。
+`title`、`patientName`、`bodyText`、`documentType` 使用 OpenSearch 内置 `cjk` 分析器作为原型的中文文本检索基线。 这四个字段另有 `.han` 子字段，由 `standard` 分词器按汉字建立索引，供单字查询使用。高亮仍按原业务字段返回。放疗号、申请单编号、计划编号和编码使用 `keyword` 精确匹配；不把编号交给中文分词。诊断名称作为标题参与全文搜索；编码命中时保留体系和版本信息供辨认。
 
-只为可用患者及其可用源记录生成记录结果。源记录本身可用但某个诊断或申请单父级失效时，该记录仍可作为独立文本结果回源；不能借其失效关联链参与临床条件判断，也不拼入失效父级的正文。
+只为可用患者及其可用源记录生成记录结果。源记录本身可用但某个诊断或申请单父级失效时，该记录仍可作为独立文本结果回源；打开失效目标时提示不可用，不拼入失效父级的正文。
 
 查询结果返回 `matchedFields`，标明命中的 `title`、`patientName`、`radiotherapyNo`、`recordNo`、`bodyText`、`code`、`documentType` 等字段，同时返回字段标签和对应匹配值或片段。标题、姓名、编号、编码及仅单据类型命中均有明确依据，不能只为正文命中返回提示。文本高亮片段在查询时生成；编号和编码精确命中展示完整值并标记匹配，不保存为第二份正文。源记录、源字段与命中位置的回源规则见[交互流程](./interaction-flows.md)。
 
-## OpenSearch 患者投影
-
-患者投影用于同时判断患者资料和具体诊断下的计划关系。索引名为 `ois-patients-<batchId>`，查询别名为 `ois-patients`，每位可用患者只有一个顶层文档，`_id = patientId`。
-
-| 字段 | OpenSearch 类型 | 内容 |
-| --- | --- | --- |
-| `batchId` | `keyword` | 与记录投影相同的同步批次 |
-| `patientId` | `keyword` | PMS 患者 UUID |
-| `radiotherapyNo` | `keyword` | 放疗号 |
-| `patientName` | `text`，附 `keyword` 子字段 | 患者姓名 |
-| `sex` | `keyword` | 性别枚举 |
-| `birthDate` | `date` | 出生日期；查询时按需求换算年龄边界 |
-| `patientRevision` | `long` | PMS 患者记录版本 |
-| `missingFields` | `keyword` 数组 | 患者资料缺失项；性别未知时记录 `sex`，出生日期缺失时记录 `birthDate` |
-| `diagnoses` | `nested` | 可用诊断对象数组，结构如下 |
-
-每个 `diagnoses` 对象包含：
-
-| 字段 | OpenSearch 类型 | 内容 |
-| --- | --- | --- |
-| `diagnosisId` | `keyword` | 具体诊断 UUID |
-| `diagnosisName` | `text`，附 `keyword` 子字段 | 规范名称及精确值 |
-| `codeSystem`、`codeVersion`、`code` | `keyword` | 成套编码或空值 |
-| `confirmationStatus` | `keyword` | 确认状态 |
-| `diagnosedOn` | `date` | 诊断日期或空值 |
-| `sourceDocumentId` | `keyword` | 来源单据 UUID，允许为空 |
-| `requestIds` | `keyword` 数组 | 属于该诊断且可用的申请单 UUID；无记录时为 `[]` |
-| `planIds` | `keyword` 数组 | 通过这些申请单关联、患者一致且可用的计划 UUID，去重后保存 |
-| `hasRelatedPlan` | `boolean` | `planIds` 非空时为 `true`，否则为 `false` |
-| `missingFields` | `keyword` 数组 | 该诊断缺失的日期、编码或来源信息，供缺失提示使用 |
-
-使用[需求](./requirements.md)定义的 `D(p)` 表示患者 `p` 下满足本次诊断条件的可用诊断集合；未设置诊断条件时，集合包含该患者全部可用诊断。名称、编码、确认状态等诊断条件放在同一个 `nested` 查询中，保持同一诊断内的字段对应关系。
-
-| 筛选条件 | 查询实现 |
-| --- | --- |
-| 有计划 | 存在一个 `nested` 诊断，同时满足本次诊断条件与 `hasRelatedPlan = true` |
-| 无计划 | 在患者级使用 `must_not nested(本次诊断条件 AND hasRelatedPlan = true)`，排除任何匹配诊断有计划的患者 |
-| 设置了任意诊断条件 | 另要求存在满足诊断条件的 `nested` 诊断，即 `D(p)` 非空；无计划筛选也须满足此项 |
-| 未设置诊断条件且筛选无计划 | 不要求存在诊断；无诊断患者可符合该条件 |
-
-“无计划”不能实现成“存在一个 `hasRelatedPlan = false` 的诊断”。例如两个匹配诊断中一个有计划、一个无计划，这种患者不符合无计划筛选。诊断 A 的名称也不能与诊断 B 的计划组合为一次命中。
-
-结果依据须覆盖完整的匹配诊断及其申请单、计划关系。可以使用 `inner_hits` 返回命中对象，但不能把其默认返回条数当作全部依据；应完整返回，或明确展示总数并提供同批次、可翻页读取的完整依据。尤其无计划结论必须由完整集合查询产生，不能根据当前展示的几条诊断推断。
-
-`diagnoses = []`、`requestIds = []` 和 `planIds = []` 表示本批次完整数据中对应集合为空。字段缺失使用空值和 `missingFields` 表达；同步失败不生成“无诊断”或“无计划”的结论。诊断状态要求及缺失项筛选行为按[需求](./requirements.md)执行。
-
 ## 手动全量同步与更新传播
 
-原型采用单个同步进程，由用户手动发起全量同步。修改虚构源数据后暂停写入，读取三个库的全部样本，再校验关系并生成两套投影；这不代表 PostgreSQL 提供了跨库事务快照。
+原型采用单个同步进程，由用户通过命令行手动发起全量同步。修改虚构源数据后暂停写入，读取三个库的全部样本，再校验关系并生成记录索引；这不代表 PostgreSQL 提供了跨库事务快照。
 
 1. 分配 `batchId`，完整读取三个库；读取失败立即停止本批次。
-2. 校验字段约束、跨库引用及患者一致性，计算可用记录和可用关系链。
-3. 从同一份读取结果生成 `ois-records-<batchId>` 与 `ois-patients-<batchId>`，逐项检查批量写入结果。
-4. 等待新索引可搜索后，校验记录数量、患者数量、关联集合及抽样查询；任一失败均不发布。
-5. 在同一次 `POST /_aliases` 中移除两个旧别名指向，并分别添加两个新指向。首次发布只执行添加。新查询通过稳定别名确定当前批次；该次查询后续分页和依据读取固定访问同一批实体索引。
+2. 校验字段约束、跨库引用及患者一致性，确定可用患者及可用源记录。
+3. 从本次读取结果生成 `ois-records-<batchId>`，逐项检查批量写入结果。
+4. 等待新索引可搜索后，校验记录总数、各类型数量、关联标识及抽样查询；任一失败均不发布。
+5. 在同一次 `POST /_aliases` 中移除 `ois-records` 的旧指向并添加新指向。首次发布只执行添加。新查询通过稳定别名确定当前批次；该次查询后续分页固定访问同一批实体索引。
 
-同一次别名操作保证两个投影一起切换。服务端校验查询上下文中的 `batchId` 并解析到对应实体索引；旧批次不可用时提示刷新，不能静默切到新批次。跨多个 HTTP 请求进行核对时仍须比较返回的 `batchId`；不能把切换前后的两个独立请求误当成同批数据。
+服务端校验查询上下文中的 `batchId` 并解析到对应实体索引；旧批次不可用时提示刷新，不能静默切到新批次。多次 HTTP 请求核对结果时须比较返回的 `batchId`，避免把切换前后的独立请求误当成同批数据。发布结果不明时回查活动别名，不直接断言切换失败。
 
 | 源数据变化 | 下一次全量同步的结果 |
 | --- | --- |
-| 患者姓名、放疗号、性别或出生日期修改 | 重建患者投影，并更新所有记录结果中复制的患者资料 |
-| 诊断名称、编码、确认状态或日期修改 | 更新诊断记录结果及该患者的对应 nested 对象 |
-| 申请单改关联诊断 | 重新计算原诊断与新诊断的申请单、计划集合；同患者约束仍须成立 |
-| 计划新增、改关联申请单或修改正文 | 更新计划记录结果，并重算涉及诊断的计划集合 |
-| 其他单据修改 | 更新其记录结果及回源内容；不从正文推导新的结构化诊断或计划 |
-| 任一源记录软删除或作废 | 从新记录投影排除该源记录；按可用性规则重算患者投影中的关系集合 |
-| 患者软删除 | 从两套新投影排除该患者及其全部记录 |
-| 失效记录恢复 | 满足约束和可用性条件后，在下一批重新进入对应投影 |
+| 患者姓名、放疗号、性别或出生日期修改 | 更新患者结果，以及所有记录结果中复制的患者资料 |
+| 诊断名称、编码、确认状态或日期修改 | 更新诊断结果的可搜索内容及展示字段 |
+| 申请单改关联诊断 | 更新申请单结果中的关联标识，同患者约束仍须成立 |
+| 计划新增、改关联申请单或修改正文 | 新增或更新计划结果及对应关联标识 |
+| 其他单据修改 | 更新该单据的搜索内容；不从正文推导诊断或计划关系 |
+| 任一源记录软删除或作废 | 从新记录索引排除该源记录，其他记录按自身可用性独立保留 |
+| 患者软删除 | 从新记录索引排除该患者及其全部记录 |
+| 失效记录恢复 | 满足约束和可用性条件后，在下一批重新进入记录索引 |
 
-本阶段不执行自动增量同步。`sourceRevision` 与 `patientRevision` 分别用于识别源记录和复制的患者资料是否发生修改；在完成下一次全量同步前，搜索结果仍代表上一成功批次，原文读取状态按[交互流程](./interaction-flows.md)处理。
+`sourceRevision` 与 `patientRevision` 分别用于识别源记录和复制的患者资料是否发生修改；在完成下一次全量同步前，搜索结果仍代表上一成功批次，原文读取状态按[交互流程](./interaction-flows.md)处理。详情中的关联列表从对应数据库读取最新数据。
 
 ## 技术参考
 
-- [OpenSearch nested 字段](https://docs.opensearch.org/latest/mappings/supported-field-types/nested/)：保持数组中每条诊断字段之间的对应关系，并通过 `inner_hits` 返回命中的对象。
 - [OpenSearch CJK 分析器](https://docs.opensearch.org/latest/analyzers/language-analyzers/cjk/)：使用内置分析器建立中文文本检索基线。
-- [OpenSearch Manage Aliases API](https://docs.opensearch.org/latest/api-reference/alias/aliases-api/)：在一次原子操作中移除和添加多个别名指向，用于同时切换两套投影。
+- [OpenSearch Manage Aliases API](https://docs.opensearch.org/latest/api-reference/alias/aliases-api/)：在一次原子操作中移除旧指向并添加新指向，用于发布完整记录索引。

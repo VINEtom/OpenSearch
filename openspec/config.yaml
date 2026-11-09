@@ -1,7 +1,7 @@
 schema: spec-driven
 
 context: |
-  这是 OIS 全局搜索与临床条件筛选的独立原型仓库。
+  这是 OIS 全局搜索的独立原型仓库。
   前端 React/Umi，轻量本地接口 Node.js/TypeScript，搜索引擎 OpenSearch。
   三个独立 PostgreSQL 原型库 pms_demo、emr_demo、rvs_demo 使用虚构数据。
   核心关系是患者、具体诊断、计划申请单、治疗计划，按保存的 UUID 关联。

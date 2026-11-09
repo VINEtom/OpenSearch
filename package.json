@@ -1,0 +1,43 @@
+{
+  "name": "ois-search-prototype",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "concurrently -k -n api,web npm:dev:server npm:dev:web",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "cd web && cross-env HOST=127.0.0.1 PORT=8107 BROWSER=none umi dev",
+    "start": "tsx server/index.ts",
+    "build:web": "cd web && umi build",
+    "build": "npm run typecheck && npm run build:web",
+    "typecheck": "tsc --noEmit",
+    "db:init": "tsx scripts/init-db.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "sync": "tsx scripts/sync.ts",
+    "test:unit": "tsx --test tests/data.test.ts tests/search.test.ts",
+    "test:integration": "tsx --test --test-concurrency=1 tests/integration.test.ts",
+    "test": "npm run test:unit",
+    "infra:up": "docker compose up -d --wait",
+    "infra:stop": "docker compose stop"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "pg": "^8.16.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "umi": "4.7.32"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.19.0",
+    "@types/pg": "^8.15.6",
+    "@types/react": "^18.3.26",
+    "@types/react-dom": "^18.3.7",
+    "concurrently": "^9.2.1",
+    "cross-env": "7.0.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
