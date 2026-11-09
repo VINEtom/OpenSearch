@@ -7,6 +7,7 @@ import { AppError } from './errors.js';
 import { projectRecords, readSnapshot, validateSnapshot } from './data.js';
 import type { RecordDocument, SourceDefect } from '../shared/types.js';
 import { activeBatch, getIndexStatus, INDEX_OWNER, readManifest, writeManifest, type IndexMeta } from './index-state.js';
+import { withDiagnosisFilters } from './diagnosis-filters.js';
 import { recordProperties } from './mapping.js';
 import { osRequest } from './opensearch.js';
 
@@ -64,10 +65,10 @@ export async function publishRecords(records: RecordDocument[], options: SyncOpt
       await osRequest(`/${previous.index}/_mapping`, 'PUT', { _meta: { ...previous.meta, published: true } });
     }
     const batchId = options.batchId ?? `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
-    const stamped = records.map(record => ({ ...record, batchId }));
+    const stamped = withDiagnosisFilters(records.map(record => ({ ...record, batchId })));
     newIndex = `${config.indexAlias}-${batchId}`;
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, stamped.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
-    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, sourceReadAt: options.sourceReadAt };
+    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, supportsDiagnosisCoding: true, sourceReadAt: options.sourceReadAt };
     await osRequest(`/${newIndex}`, 'PUT', {
       settings: { index: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '-1' } },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },

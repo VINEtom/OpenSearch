@@ -264,7 +264,8 @@ export default function SearchPage() {
           <strong>识别出的筛选条件</strong>
           <span>确诊诊断 · {result.patientFilters.diagnosis}</span>
           <span>确诊日期 · {result.patientFilters.diagnosedFrom} 至 {result.patientFilters.diagnosedThrough}</span>
-          <span>处方分次数 ≥ {result.patientFilters.minimumFractions}</span>
+          {result.patientFilters.codingSystems && <span>编码范围 · {result.patientFilters.codingSystems.join(' / ')}</span>}
+          {result.patientFilters.minimumFractions !== undefined && <span>处方分次数 ≥ {result.patientFilters.minimumFractions}</span>}
         </div>}
 
         {!form.q.trim() && !result && <div className="panel empty-state compact"><h2>输入关键词开始搜索</h2></div>}

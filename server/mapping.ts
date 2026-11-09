@@ -11,6 +11,7 @@ export const recordProperties = {
   prescribedFractions: { type: 'integer' },
   diagnosisFilters: { type: 'nested', properties: {
     name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
+    codingSystem: { type: 'keyword' }, code: { type: 'keyword' },
     maxPrescribedFractions: { type: 'integer' },
   } },
   diagnosisIds: { type: 'keyword' }, planRequestId: { type: 'keyword' }, sourceDocumentId: { type: 'keyword' },

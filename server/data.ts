@@ -308,28 +308,11 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
 export function projectRecords(snapshot: Snapshot, batchId: string): RecordDocument[] {
   validateSnapshot(snapshot, { real: config.sourceMode === 'real' });
   const patients = new Map(snapshot.patients.map(row => [row.id, row]));
-  const maxFractions = new Map<string, number>();
-  for (const request of snapshot.planRequests) {
-    if (availability(request) !== 'available' || request.prescribed_fractions === null) continue;
-    for (const diagnosisId of request.diagnosis_ids) {
-      maxFractions.set(diagnosisId, Math.max(maxFractions.get(diagnosisId) ?? 0, request.prescribed_fractions));
-    }
-  }
-  const byPatient = new Map<string, NonNullable<RecordDocument['diagnosisFilters']>>();
-  for (const diagnosis of snapshot.diagnoses) {
-    const fractions = maxFractions.get(diagnosis.id);
-    if (availability(diagnosis) !== 'available' || diagnosis.confirmation_status !== 'confirmed' || !diagnosis.diagnosed_on || fractions === undefined) continue;
-    const filters = byPatient.get(diagnosis.patient_id) ?? [];
-    filters.push({ name: diagnosis.diagnosis_name, diagnosedOn: diagnosis.diagnosed_on, maxPrescribedFractions: fractions });
-    byPatient.set(diagnosis.patient_id, filters);
-  }
   const groups = rowsByType(snapshot);
   return RECORD_TYPES.flatMap(type => groups[type].flatMap(row => {
     const patient = patients.get(type === 'patient' ? row.id : (row as ClinicalRow).patient_id)!;
     if (availability(row) !== 'available' || availability(patient) !== 'available') return [];
-    const document = projectRow(type, row, patient, batchId, snapshot);
-    if (type === 'patient') document.diagnosisFilters = byPatient.get(patient.id) ?? [];
-    return [document];
+    return [projectRow(type, row, patient, batchId, snapshot)];
   }));
 }
 

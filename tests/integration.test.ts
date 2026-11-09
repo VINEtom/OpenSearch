@@ -235,7 +235,7 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       await seed({ reset: true, snapshot });
       await syncRecords();
       const result = await query(text);
-      assert.deepEqual(result.patientFilters, filters);
+      assert.deepEqual(result.patientFilters, { ...filters, codingSystems: ['ICD-10', 'ICD-11'] });
       assertRecords(result, ['P1']);
       assertRecords(await query('最近3个月确诊鼻咽癌,处方至少21次'), []);
       assertRecords(await query(text, { scope: 'patient', patientId: idFor('P2') }), []);
@@ -247,6 +247,37 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       await syncRecords();
       assertRecords(await query(text), []);
       assertRecords(await query('屏气'), [...BREATHING_RECORDS, 'R4']);
+    });
+  });
+
+  it('matches confirmed ICD-10 and ICD-11 diagnoses without requiring a prescription', async () => {
+    await withBaseline(async () => {
+      const text = '最近10个月确诊鼻咽癌';
+      const { diagnosedFrom, diagnosedThrough } = parsePatientQuery(text)!;
+      const snapshot = baseline();
+      const [npc, , otherPatient, unrelated] = snapshot.diagnoses;
+      Object.assign(npc, {
+        diagnosis_name: '鼻咽后壁恶性肿瘤', code_system: 'http://hl7.org/fhir/sid/icd-10',
+        code_version: 'test', code: 'C11.1', diagnosed_on: diagnosedFrom,
+      });
+      Object.assign(otherPatient, {
+        diagnosis_name: '鼻咽鳞状细胞癌', code_system: 'http://id.who.int/icd/release/11/mms',
+        code_version: 'test', code: '2B6B.0', confirmation_status: 'confirmed', diagnosed_on: diagnosedThrough,
+      });
+      Object.assign(unrelated, {
+        diagnosis_name: '鼻咽癌', code_system: 'http://hl7.org/fhir/sid/icd-10',
+        code_version: 'test', code: '2B6B.0', confirmation_status: 'confirmed', diagnosed_on: diagnosedThrough,
+      });
+      snapshot.diagnoses.push({ ...npc, id: idFor('D5') });
+      await seed({ reset: true, snapshot });
+      await syncRecords();
+
+      const result = await query(text);
+      assertRecords(result, ['P1', 'P2']);
+      assert.deepEqual(result.patientFilters, {
+        diagnosis: '鼻咽癌', diagnosedFrom, diagnosedThrough, codingSystems: ['ICD-10', 'ICD-11'],
+      });
+      assertRecords(await query(text + '、处方不少于 20 次'), ['P1']);
     });
   });
 

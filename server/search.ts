@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type Source } from '../shared/types.js';
 import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
+import { diagnosisValueSet } from './diagnosis-terminology.js';
 import { parsePatientQuery } from './patient-query.js';
 import { osRequest } from './opensearch.js';
 
@@ -69,15 +70,30 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
   };
   if (patientFilters) {
     const { diagnosis, diagnosedFrom, diagnosedThrough, minimumFractions } = patientFilters;
+    const valueSet = diagnosisValueSet(diagnosis);
+    const exactName = { term: { 'diagnosisFilters.name': diagnosis } };
+    const coding = valueSet ? { bool: {
+      should: [
+        ...valueSet.compose.include.map(group => ({ bool: { filter: [
+          { term: { 'diagnosisFilters.codingSystem': group.system } },
+          { terms: { 'diagnosisFilters.code': group.concept.map(concept => concept.code) } },
+        ] } })),
+        { bool: { filter: [
+          { term: { 'diagnosisFilters.codingSystem': 'DEMO-ONCOLOGY' } },
+          { term: { 'diagnosisFilters.code': 'DEMO-NPC' } },
+        ] } },
+      ],
+      minimum_should_match: 1,
+    } } : exactName;
     return {
       ...resultWindow,
       query: { bool: { filter: [
         ...filters,
         { term: { recordType: 'patient' } },
         { nested: { path: 'diagnosisFilters', score_mode: 'none', query: { bool: { filter: [
-          { term: { 'diagnosisFilters.name': diagnosis } },
+          coding,
           { range: { 'diagnosisFilters.diagnosedOn': { gte: diagnosedFrom, lte: diagnosedThrough } } },
-          { range: { 'diagnosisFilters.maxPrescribedFractions': { gte: minimumFractions } } },
+          ...(minimumFractions === undefined ? [] : [{ range: { 'diagnosisFilters.maxPrescribedFractions': { gte: minimumFractions } } }]),
         ] } } } },
       ] } },
       sort: [{ radiotherapyNo: 'asc' }, { id: 'asc' }],
@@ -153,8 +169,11 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
   try {
     const batch = await resolveBatch(params.batchId);
     const patientFilters = parsePatientQuery(params.q);
-    if (patientFilters && !batch.meta.supportsPatientFilters) {
-      throw new AppError('PATIENT_FILTER_SYNC_REQUIRED', '请先同步搜索数据，再按确诊日期和处方分次数查询。', 409);
+    if (patientFilters && !batch.meta.supportsDiagnosisCoding) {
+      throw new AppError('PATIENT_FILTER_SYNC_REQUIRED', '请先同步搜索数据，再按确诊日期查询。', 409);
+    }
+    if (patientFilters && diagnosisValueSet(patientFilters.diagnosis)) {
+      patientFilters.codingSystems = ['ICD-10', 'ICD-11'];
     }
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;

@@ -47,3 +47,9 @@ test('parses the complete patient query in the Shanghai calendar and clamps mont
   assert.equal(parsePatientQuery(q + '且未开始治疗', now), undefined);
   assert.equal(parsePatientQuery('鼻咽癌', now), undefined);
 });
+
+test('recognizes confirmed diagnosis dates without adding a prescription constraint', () => {
+  assert.deepEqual(parsePatientQuery('最近10个月确诊鼻咽癌', new Date('2026-11-09T08:00:00Z')), {
+    diagnosis: '鼻咽癌', diagnosedFrom: '2026-01-09', diagnosedThrough: '2026-11-09',
+  });
+});
