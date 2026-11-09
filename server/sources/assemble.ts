@@ -18,6 +18,7 @@ export interface RealDiagnosis {
   patientId: string;
   name: string | null;
   code: string | null;
+  codeVersion: string | null;
   definiteDate: string | null;
   parts: unknown[];
   createdAt: string | null;
@@ -101,7 +102,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
     const diagnosedOn = calendarDate(row.definiteDate);
     diagnoses.push({
       ...base(row.id, row.createdAt, row.updatedAt), patient_id: row.patientId, voided_at: null,
-      diagnosis_name: name, code_system: null, code_version: null, code: plain(row.code),
+      diagnosis_name: name, code_system: null, code_version: plain(row.codeVersion), code: plain(row.code),
       confirmation_status: diagnosedOn ? 'confirmed' : 'unknown', diagnosed_on: diagnosedOn,
       source_document_id: null, summary: joinText(row.parts),
     });

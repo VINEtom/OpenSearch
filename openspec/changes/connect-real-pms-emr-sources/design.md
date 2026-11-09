@@ -68,7 +68,8 @@
 | --- | --- | --- |
 | `patient_id` | `patient_index` | 与 EMR 患者表主键一致；正常为 PMS 患者 UUID |
 | `diagnosis_name` | `name` | 规范名称（源系统创建时含 ICD 编码前缀） |
-| `code` | `icd_code` | 体系与版本未知，置空；真实模式放宽"编码成套"校验 |
+| `code` | `icd_code` | 真实模式放宽“编码成套”校验 |
+| `code_version` | `emr_icd_template."Version"`，按 `icd_code` 对应 | 字典版本，如 ICD-10、ICD-11。诊断行上的 `version_number` 为空，不用 |
 | `confirmation_status` | 由 `definite_diagnosis_date` 推导 | 有→`confirmed`，无→`unknown` |
 | `diagnosed_on` | `definite_diagnosis_date` 的日期部分 | 源库时间为无时区时间戳，按存储值取日期 |
 | `summary` | `clinical_description` + `remarks` + `method_description` + `family_history` + `other_tumor_history` + `additional_diagnosis` + `in_charge_doctor_name` + `attending_doctor_name` 按序非空拼接 | 临床描述、备注、诊断方法描述、家族史、本人其他肿瘤史、附加诊断、主管与主治医生姓名共同构成诊断正文 |

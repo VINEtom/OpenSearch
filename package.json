@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "db:init": "tsx scripts/init-db.ts",
     "db:seed": "tsx scripts/seed.ts",
+    "data:capture": "tsx scripts/capture-search.ts",
     "demo:data": "SOURCE_MODE=demo tsx scripts/demo-data.ts",
     "sync": "tsx scripts/sync.ts",
     "test:unit": "tsx --test tests/data.test.ts tests/search.test.ts tests/real-source.test.ts tests/simulation.test.ts",

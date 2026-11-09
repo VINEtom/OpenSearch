@@ -21,8 +21,8 @@ test('maps sex, confirmation, fractions, multiple diagnoses and document type', 
   const snapshot = assembleReal(input({
     patients: [{ id: idFor('RP1'), radiotherapyNo: 'PA2600', name: '王小明啊^^^^', sex: 1, birthDate: '1999-08-18', ...times }, { id: idFor('RP2'), radiotherapyNo: 'PA1', name: '空性别', sex: null, birthDate: null, ...times }],
     diagnoses: [
-      { id: idFor('RD1'), patientId: idFor('RP1'), name: '鼻咽癌', code: 'C11', definiteDate: '2026-08-06 08:00:00', parts: ['临床', null, '方法'], ...times },
-      { id: idFor('RD2'), patientId: idFor('RP1'), name: '未确诊', code: null, definiteDate: null, parts: [], ...times },
+      { id: idFor('RD1'), patientId: idFor('RP1'), name: '鼻咽癌', code: 'C11', codeVersion: 'ICD-10', definiteDate: '2026-08-06 08:00:00', parts: ['临床', null, '方法'], ...times },
+      { id: idFor('RD2'), patientId: idFor('RP1'), name: '未确诊', code: null, codeVersion: null, definiteDate: null, parts: [], ...times },
     ],
     requests: [{ id: idFor('RR1'), patientId: idFor('RP1'), title: '计划申请单', parts: ['描述', ['直肠', '直肠', 'PTV1']], fractions: 28, diagnosisIds: [idFor('RD1'), idFor('RD2')], courseId: idFor('RC1'), ...times }],
     documents: [
@@ -36,6 +36,7 @@ test('maps sex, confirmation, fractions, multiple diagnoses and document type', 
   assert.equal(snapshot.patients[1].sex, 'unknown');
   assert.equal(snapshot.diagnoses[0].confirmation_status, 'confirmed');
   assert.equal(snapshot.diagnoses[0].code, 'C11');
+  assert.equal(snapshot.diagnoses[0].code_version, 'ICD-10');
   assert.equal(snapshot.diagnoses[0].code_system, null);
   assert.equal(snapshot.diagnoses[1].confirmation_status, 'unknown');
   assert.equal(snapshot.diagnoses[0].summary, '临床\n方法');
@@ -51,7 +52,7 @@ test('maps sex, confirmation, fractions, multiple diagnoses and document type', 
 test('isolates missing patients, unlinked requests and treatment orders without blocking the rest', () => {
   const snapshot = assembleReal(input({
     patients: [{ id: idFor('RP1'), radiotherapyNo: 'PA1', name: '甲', sex: 2, birthDate: null, ...times }],
-    diagnoses: [{ id: idFor('RD1'), patientId: idFor('RP1'), name: '鼻咽癌', code: null, definiteDate: '2026-01-01', parts: [], ...times }, { id: idFor('RD9'), patientId: idFor('RP9'), name: '本地', code: null, definiteDate: null, parts: [], ...times }],
+    diagnoses: [{ id: idFor('RD1'), patientId: idFor('RP1'), name: '鼻咽癌', code: null, codeVersion: null, definiteDate: '2026-01-01', parts: [], ...times }, { id: idFor('RD9'), patientId: idFor('RP9'), name: '本地', code: null, codeVersion: null, definiteDate: null, parts: [], ...times }],
     requests: [
       { id: idFor('RR1'), patientId: idFor('RP1'), title: '有关联', parts: [], fractions: null, diagnosisIds: [idFor('RD1')], courseId: null, ...times },
       { id: idFor('RR2'), patientId: idFor('RP1'), title: '无关联', parts: [], fractions: 10, diagnosisIds: [], courseId: null, ...times },
@@ -67,7 +68,7 @@ test('isolates missing patients, unlinked requests and treatment orders without 
 test('a diagnosis linked across patients blocks the batch', () => {
   assert.throws(() => assembleReal(input({
     patients: [{ id: idFor('RP1'), radiotherapyNo: 'PA1', name: '甲', sex: 1, birthDate: null, ...times }, { id: idFor('RP2'), radiotherapyNo: 'PA2', name: '乙', sex: 1, birthDate: null, ...times }],
-    diagnoses: [{ id: idFor('RD2'), patientId: idFor('RP2'), name: '肺癌', code: null, definiteDate: null, parts: [], ...times }],
+    diagnoses: [{ id: idFor('RD2'), patientId: idFor('RP2'), name: '肺癌', code: null, codeVersion: null, definiteDate: null, parts: [], ...times }],
     requests: [{ id: idFor('RR1'), patientId: idFor('RP1'), title: '错关联', parts: [], fractions: 1, diagnosisIds: [idFor('RD2')], courseId: null, ...times }],
   })), (error: unknown) => error instanceof AppError && error.code === 'RELATION_ERROR');
 });

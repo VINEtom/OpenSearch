@@ -5,6 +5,7 @@ import { RECORD_TYPES, type IndexStatus, type RecordType } from '../shared/types
 import { config } from './config.js';
 import { AppError } from './errors.js';
 import { projectRecords, readSnapshot, validateSnapshot } from './data.js';
+import type { RecordDocument, SourceDefect } from '../shared/types.js';
 import { activeBatch, getIndexStatus, INDEX_OWNER, readManifest, writeManifest, type IndexMeta } from './index-state.js';
 import { recordProperties } from './mapping.js';
 import { osRequest } from './opensearch.js';
@@ -45,29 +46,34 @@ async function recordFailure(message: string, publicationBatchId?: string): Prom
 }
 
 export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatus> {
+  const snapshot = await readSnapshot();
+  validateSnapshot(snapshot, { real: config.sourceMode === 'real' });
+  const batchId = `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
+  const records = projectRecords(snapshot, batchId);
+  return publishRecords(records, { ...options, batchId, defects: snapshot.defects ?? [], sourceReadAt: snapshot.readAt });
+}
+
+export async function publishRecords(records: RecordDocument[], options: SyncOptions & { batchId?: string; defects?: SourceDefect[]; sourceReadAt?: IndexMeta['sourceReadAt'] } = {}): Promise<IndexStatus> {
   const release = await acquireLock();
   let newIndex: string | undefined;
   let publicationAttempted = false;
   let publicationBatchId: string | undefined;
   try {
     const previous = await activeBatch();
-    // Recover publication bookkeeping after a process interruption before retiring an old batch.
     if (previous && !previous.meta.published) {
       await osRequest(`/${previous.index}/_mapping`, 'PUT', { _meta: { ...previous.meta, published: true } });
     }
-    const snapshot = await readSnapshot();
-    validateSnapshot(snapshot, { real: config.sourceMode === 'real' });
-    const batchId = `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
+    const batchId = options.batchId ?? `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
+    const stamped = records.map(record => ({ ...record, batchId }));
     newIndex = `${config.indexAlias}-${batchId}`;
-    const records = projectRecords(snapshot, batchId);
-    const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, records.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
-    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: records.length, typeCounts, supportsPatientFilters: true, sourceReadAt: snapshot.readAt };
+    const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, stamped.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
+    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, sourceReadAt: options.sourceReadAt };
     await osRequest(`/${newIndex}`, 'PUT', {
       settings: { index: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '-1' } },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },
     });
-    for (let offset = 0; offset < records.length; offset += 500) {
-      const chunk = records.slice(offset, offset + 500);
+    for (let offset = 0; offset < stamped.length; offset += 500) {
+      const chunk = stamped.slice(offset, offset + 500);
       const lines = chunk.flatMap((record, i) => [
         JSON.stringify({ index: { _index: newIndex, _id: record.id } }),
         JSON.stringify(options.fault === 'bulk' && offset === 0 && i === 0 ? { ...record, sourceRevision: 'injected-invalid-long' } : record),
@@ -87,19 +93,19 @@ export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatu
       size: 0, track_total_hits: true, query: { match_all: {} }, aggs: { types: { terms: { field: 'recordType', size: 5 } } },
     });
     const actual = Object.fromEntries(check.aggregations.types.buckets.map(bucket => [bucket.key, bucket.doc_count]));
-    if (check.timed_out || check._shards.failed || check.hits.total.relation !== 'eq' || check.hits.total.value !== records.length || RECORD_TYPES.some(type => (actual[type] || 0) !== typeCounts[type])) {
+    if (check.timed_out || check._shards.failed || check.hits.total.relation !== 'eq' || check.hits.total.value !== stamped.length || RECORD_TYPES.some(type => (actual[type] || 0) !== typeCounts[type])) {
       throw new AppError('SYNC_VERIFY_FAILED', '新索引数量校验失败，未发布新数据。', 503);
     }
     // Read every tiny prototype document back: validate identifiers, relations and copied data, not only totals.
-    for (let offset = 0; offset < records.length; offset += 500) {
-      const chunk = records.slice(offset, offset + 500);
+    for (let offset = 0; offset < stamped.length; offset += 500) {
+      const chunk = stamped.slice(offset, offset + 500);
       const verified = await osRequest<{ docs: { found: boolean; _source: unknown }[] }>(`/${newIndex}/_mget`, 'POST', { ids: chunk.map(record => record.id) });
       if (verified.docs.length !== chunk.length || verified.docs.some((doc, i) => !doc.found || JSON.stringify(doc._source) !== JSON.stringify(chunk[i]))) {
         throw new AppError('SYNC_VERIFY_FAILED', '新索引内容校验失败，未发布新数据。', 503);
       }
     }
     for (const type of RECORD_TYPES) {
-      const sample = records.find(record => record.recordType === type);
+      const sample = stamped.find(record => record.recordType === type);
       if (!sample) continue;
       const probe = await osRequest<{
         timed_out: boolean; _shards: { failed: number };
@@ -137,15 +143,15 @@ export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatu
       if (keep.has(name) || body.mappings?._meta?.owner !== INDEX_OWNER) continue;
       await osRequest(`/${encodeURIComponent(name)}`, 'DELETE').catch(() => undefined);
     }
-    const lastAttempt = { status: 'success' as const, at: meta.syncedAt, message: `完整同步已发布，共 ${records.length} 条记录` };
+    const lastAttempt = { status: 'success' as const, at: meta.syncedAt, message: `完整同步已发布，共 ${stamped.length} 条记录` };
     try {
       if (options.fault === 'manifest') throw new Error('Injected manifest write failure');
-      await writeManifest({ batchId, syncedAt: meta.syncedAt, total: records.length, defects: snapshot.defects ?? [], lastAttempt });
+      await writeManifest({ batchId, syncedAt: meta.syncedAt, total: stamped.length, defects: options.defects ?? [], lastAttempt });
     } catch {
       // The alias is authoritative; status reading can reconstruct the local manifest.
       return getIndexStatus();
     }
-    return { state: 'ready', sourceMode: config.sourceMode, batchId, syncedAt: meta.syncedAt, total: records.length, defects: snapshot.defects ?? [], lastAttempt };
+    return { state: 'ready', sourceMode: config.sourceMode, batchId, syncedAt: meta.syncedAt, total: stamped.length, defects: options.defects ?? [], lastAttempt };
   } catch (error) {
     const appError = error instanceof AppError ? error : new AppError('SYNC_FAILED', '同步失败，请检查原型数据源和搜索服务后重试。', 503);
     await recordFailure(appError.message, publicationBatchId).catch(() => {});

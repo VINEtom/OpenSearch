@@ -61,13 +61,19 @@ export async function readRealSnapshot(): Promise<Snapshot> {
       FROM pms_patient WHERE NOT is_deleted ORDER BY id`)).rows),
     readOnly(emr, async client => {
       const diagnoses = (await client.query(`
-        SELECT id::text, patient_index::text AS "patientId", name, icd_code AS code,
-          to_char(definite_diagnosis_date, 'YYYY-MM-DD') AS "definiteDate",
-          clinical_description, remarks, method_description, family_history, other_tumor_history, additional_diagnosis,
-          in_charge_doctor_name, attending_doctor_name,
-          to_char(creation_time, 'YYYY-MM-DD"T"HH24:MI:SS') AS "createdAt",
-          to_char(COALESCE(last_modification_time, creation_time), 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
-        FROM emr_diagnosis WHERE NOT is_deleted AND status IS DISTINCT FROM 2 ORDER BY id`)).rows;
+        SELECT d.id::text, d.patient_index::text AS "patientId", d.name, d.icd_code AS code, icd.version AS "codeVersion",
+          to_char(d.definite_diagnosis_date, 'YYYY-MM-DD') AS "definiteDate",
+          d.clinical_description, d.remarks, d.method_description, d.family_history, d.other_tumor_history, d.additional_diagnosis,
+          d.in_charge_doctor_name, d.attending_doctor_name,
+          to_char(d.creation_time, 'YYYY-MM-DD"T"HH24:MI:SS') AS "createdAt",
+          to_char(COALESCE(d.last_modification_time, d.creation_time), 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
+        FROM emr_diagnosis d
+        LEFT JOIN LATERAL (
+          SELECT "Version" AS version FROM emr_icd_template
+          WHERE code = d.icd_code AND "Version" IS NOT NULL AND btrim("Version") <> ''
+          ORDER BY "Version" LIMIT 1
+        ) icd ON true
+        WHERE NOT d.is_deleted AND d.status IS DISTINCT FROM 2 ORDER BY d.id`)).rows;
       const tumor = tumorText.map(name => `p."${name}"`).join(', ');
       const requests = (await client.query(`
         SELECT p.id::text, p.patient_guid::text AS "patientId", p.prescription_name AS title, p.course_id::text AS "courseId",
