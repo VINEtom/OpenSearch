@@ -8,6 +8,11 @@ export const recordProperties = {
   sex: { type: 'keyword' }, birthDate: { type: 'date', format: 'strict_date' }, recordNo: { type: 'keyword' },
   title: { type: 'text', analyzer: 'cjk', fields: { keyword: { type: 'keyword' }, han } },
   bodyText: { type: 'text', analyzer: 'cjk', fields: { han } }, businessDate: { type: 'date', format: 'strict_date' }, updatedAt: { type: 'date' },
+  prescribedFractions: { type: 'integer' },
+  diagnosisFilters: { type: 'nested', properties: {
+    name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
+    maxPrescribedFractions: { type: 'integer' },
+  } },
   diagnosisId: { type: 'keyword' }, planRequestId: { type: 'keyword' }, sourceDocumentId: { type: 'keyword' },
   confirmationStatus: { type: 'keyword' }, planStatus: { type: 'keyword' },
   documentType: { type: 'text', analyzer: 'cjk', fields: { keyword: { type: 'keyword' }, han } },

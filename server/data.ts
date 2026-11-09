@@ -33,6 +33,7 @@ export interface PlanRequestRow extends ClinicalRow {
   title: string;
   body_text: string | null;
   requested_on: string | null;
+  prescribed_fractions: number | null;
 }
 export interface DocumentRow extends ClinicalRow {
   document_type: string;
@@ -175,6 +176,10 @@ function validateRow(type: RecordType, row: Row): void {
     if (data.source_document_id !== null && (typeof data.source_document_id !== 'string' || !uuid.test(data.source_document_id))) badData(`诊断 ${row.id} 来源单据 UUID 无效`);
     checkText(data.summary, 'summary');
   }
+  if (type === 'plan_request') {
+    const fractions = (row as PlanRequestRow).prescribed_fractions;
+    if (fractions !== null && (!Number.isInteger(fractions) || fractions < 1 || fractions > 2147483647)) badData('处方分次数必须为正整数或 NULL');
+  }
   if (type === 'plan_request' || type === 'document') checkText(data.body_text, 'body_text');
   if (type === 'treatment_plan') { checkText(data.notes, 'notes'); checkText(data.status, 'status'); }
 }
@@ -255,7 +260,7 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
   if (type === 'plan_request') {
     const value = row as PlanRequestRow;
     Object.assign(document, { title: value.title, bodyText: value.body_text, recordNo: value.request_no,
-      businessDate: value.requested_on, diagnosisId: value.diagnosis_id });
+      businessDate: value.requested_on, diagnosisId: value.diagnosis_id, prescribedFractions: value.prescribed_fractions });
   }
   if (type === 'document') {
     const value = row as DocumentRow;
@@ -278,11 +283,26 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
 export function projectRecords(snapshot: Snapshot, batchId: string): RecordDocument[] {
   validateSnapshot(snapshot);
   const patients = new Map(snapshot.patients.map(row => [row.id, row]));
+  const maxFractions = new Map<string, number>();
+  for (const request of snapshot.planRequests) {
+    if (availability(request) !== 'available' || request.prescribed_fractions === null) continue;
+    maxFractions.set(request.diagnosis_id, Math.max(maxFractions.get(request.diagnosis_id) ?? 0, request.prescribed_fractions));
+  }
+  const byPatient = new Map<string, NonNullable<RecordDocument['diagnosisFilters']>>();
+  for (const diagnosis of snapshot.diagnoses) {
+    const fractions = maxFractions.get(diagnosis.id);
+    if (availability(diagnosis) !== 'available' || diagnosis.confirmation_status !== 'confirmed' || !diagnosis.diagnosed_on || fractions === undefined) continue;
+    const filters = byPatient.get(diagnosis.patient_id) ?? [];
+    filters.push({ name: diagnosis.diagnosis_name, diagnosedOn: diagnosis.diagnosed_on, maxPrescribedFractions: fractions });
+    byPatient.set(diagnosis.patient_id, filters);
+  }
   const groups = rowsByType(snapshot);
   return RECORD_TYPES.flatMap(type => groups[type].flatMap(row => {
     const patient = patients.get(type === 'patient' ? row.id : (row as ClinicalRow).patient_id)!;
-    return availability(row) === 'available' && availability(patient) === 'available'
-      ? [projectRow(type, row, patient, batchId, snapshot)] : [];
+    if (availability(row) !== 'available' || availability(patient) !== 'available') return [];
+    const document = projectRow(type, row, patient, batchId, snapshot);
+    if (type === 'patient') document.diagnosisFilters = byPatient.get(patient.id) ?? [];
+    return [document];
   }));
 }
 
@@ -302,6 +322,10 @@ function detailFields(record: RecordDocument): DetailField[] {
     { name: 'code', label: '诊断编码', value: record.code },
   );
   if (record.recordType === 'plan_request' || record.recordType === 'treatment_plan') fields.push({ name: 'recordNo', label: record.recordType === 'plan_request' ? '申请单编号' : '计划编号', value: record.recordNo });
+  if (record.recordType === 'plan_request') fields.push({
+    name: 'prescribedFractions', label: '处方分次数',
+    value: record.prescribedFractions == null ? null : String(record.prescribedFractions),
+  });
   if (record.recordType === 'document') fields.push({ name: 'documentType', label: '单据类型', value: record.documentType });
   if (record.recordType === 'treatment_plan') fields.push({ name: 'planStatus', label: '计划状态', value: record.planStatus });
   const bodyLabel: Partial<Record<RecordType, string>> = { diagnosis: '诊断说明', plan_request: '申请内容', document: '单据正文', treatment_plan: '计划备注' };

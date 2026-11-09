@@ -37,6 +37,8 @@ export interface RecordDocument {
   codeSystem: string | null;
   codeVersion: string | null;
   code: string | null;
+  prescribedFractions?: number | null;
+  diagnosisFilters?: { name: string; diagnosedOn: string; maxPrescribedFractions: number }[];
   missingFields: string[];
 }
 export interface MatchField {
@@ -55,7 +57,14 @@ export interface SearchParams {
   page?: number;
   batchId?: string;
 }
+export interface PatientSearchFilters {
+  diagnosis: string;
+  diagnosedFrom: string;
+  diagnosedThrough: string;
+  minimumFractions: number;
+}
 export interface SearchResponse {
+  patientFilters?: PatientSearchFilters;
   q: string;
   scope: 'all' | 'patient';
   patientId?: string;

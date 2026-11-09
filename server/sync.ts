@@ -61,7 +61,7 @@ export async function syncRecords(options: SyncOptions = {}): Promise<IndexStatu
     newIndex = `${config.indexAlias}-${batchId}`;
     const records = projectRecords(snapshot, batchId);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, records.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
-    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: records.length, typeCounts, sourceReadAt: snapshot.readAt };
+    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: records.length, typeCounts, supportsPatientFilters: true, sourceReadAt: snapshot.readAt };
     await osRequest(`/${newIndex}`, 'PUT', {
       settings: { number_of_shards: 1, number_of_replicas: 0 },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },

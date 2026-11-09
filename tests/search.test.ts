@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { parsePatientQuery } from '../server/patient-query.js';
 import { assertCompleteResponse, buildSearchQuery, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
 
 test('rejects unsupported, duplicated, mismatched and malformed query inputs', () => {
@@ -32,4 +33,14 @@ test('partial, timed-out and inexact search results never become successful zero
   assert.throws(() => assertCompleteResponse({ ...good, timed_out: true }));
   assert.throws(() => assertCompleteResponse({ ...good, _shards: { failed: 1 } }));
   assert.throws(() => assertCompleteResponse({ ...good, hits: { total: { value: 10000, relation: 'gte' }, hits: [] } }));
+});
+
+test('parses the complete patient query in the Shanghai calendar and clamps month end', () => {
+  const now = new Date('2026-05-30T16:30:00Z');
+  const q = '最近三个月确诊鼻咽癌、处方不少于 20 次';
+  assert.deepEqual(parsePatientQuery(q, now), {
+    diagnosis: '鼻咽癌', diagnosedFrom: '2026-02-28', diagnosedThrough: '2026-05-31', minimumFractions: 20,
+  });
+  assert.equal(parsePatientQuery(q + '且未开始治疗', now), undefined);
+  assert.equal(parsePatientQuery('鼻咽癌', now), undefined);
 });

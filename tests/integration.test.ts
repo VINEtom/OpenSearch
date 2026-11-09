@@ -11,6 +11,7 @@ import { config } from '../server/config.js';
 import { closePools, getPool, loadDetail, readSnapshot } from '../server/data.js';
 import { AppError } from '../server/errors.js';
 import { getIndexStatus, readIndexMeta, readManifest, writeManifest } from '../server/index-state.js';
+import { parsePatientQuery } from '../server/patient-query.js';
 import { searchRecords } from '../server/search.js';
 import { syncRecords } from '../server/sync.js';
 import { osRequest } from '../server/opensearch.js';
@@ -230,6 +231,42 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       const detail = await loadDetail('emr', 'diagnosis', result.patients[0].diagnosisId);
       assert.equal(detail.record.sourceId, idFor('D5'));
       assert.equal(detail.record.bodyText, '复诊记录：鼻咽癌。');
+    });
+  });
+
+  it('matches patients once, using the date and prescription of the same confirmed diagnosis', async () => {
+    await withBaseline(async () => {
+      const text = '最近三个月确诊鼻咽癌、处方不少于 20 次';
+      const filters = parsePatientQuery(text)!;
+      const snapshot = baseline();
+      const [npc, lung, suspected] = snapshot.diagnoses;
+      npc.diagnosed_on = filters.diagnosedFrom;
+      lung.diagnosed_on = filters.diagnosedThrough;
+      suspected.diagnosed_on = filters.diagnosedThrough;
+      const repeat = { ...repeatedDiagnosis(), diagnosed_on: filters.diagnosedThrough };
+      snapshot.diagnoses.push(repeat);
+      const [npcRequest, lungRequest, deletedRequest] = snapshot.planRequests;
+      npcRequest.prescribed_fractions = 20;
+      lungRequest.prescribed_fractions = 30;
+      snapshot.planRequests.push(
+        { ...npcRequest, id: idFor('R4'), request_no: 'REQ-004', diagnosis_id: repeat.id },
+        { ...deletedRequest, id: idFor('R5'), request_no: 'REQ-005', deleted_at: null },
+      );
+      await seed({ reset: true, snapshot });
+      await syncRecords();
+      const result = await query(text);
+      assert.deepEqual(result.patientFilters, filters);
+      assertRecords(result, ['P1']);
+      assertRecords(await query('最近3个月确诊鼻咽癌,处方至少21次'), []);
+      assertRecords(await query(text, { scope: 'patient', patientId: idFor('P2') }), []);
+
+      const beforeWindow = new Date(filters.diagnosedFrom);
+      beforeWindow.setUTCDate(beforeWindow.getUTCDate() - 1);
+      await getPool('emr').query('UPDATE diagnoses SET diagnosed_on = $1 WHERE id = ANY($2::uuid[])',
+        [beforeWindow.toISOString().slice(0, 10), [npc.id, repeat.id]]);
+      await syncRecords();
+      assertRecords(await query(text), []);
+      assertRecords(await query('屏气'), [...BREATHING_RECORDS, 'R4']);
     });
   });
 

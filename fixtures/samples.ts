@@ -36,9 +36,9 @@ export function baseline(): Snapshot {
       { ...clinical('D4', 'P3'), diagnosis_name: '肺癌', code_system: null, code_version: null, code: null, confirmation_status: 'unknown', diagnosed_on: null, source_document_id: null, summary: null },
     ],
     planRequests: [
-      { ...clinical('R1', 'P1'), diagnosis_id: idFor('D1'), request_no: 'REQ-001', title: '鼻咽癌放疗申请', body_text: '本次采用屏气训练方案。', requested_on: '2026-10-05' },
-      { ...clinical('R2', 'P1'), diagnosis_id: idFor('D2'), request_no: 'REQ-002', title: '肺部计划申请', body_text: '按常规流程准备。', requested_on: '2026-10-05' },
-      { ...clinical('R3', 'P2'), diagnosis_id: idFor('D3'), request_no: 'REQ-003', title: '历史申请', body_text: '历史申请内容。', requested_on: '2026-10-05', deleted_at: SAMPLE_TIMESTAMP },
+      { ...clinical('R1', 'P1'), diagnosis_id: idFor('D1'), request_no: 'REQ-001', title: '鼻咽癌放疗申请', body_text: '本次采用屏气训练方案。', prescribed_fractions: 20, requested_on: '2026-10-05' },
+      { ...clinical('R2', 'P1'), diagnosis_id: idFor('D2'), request_no: 'REQ-002', title: '肺部计划申请', body_text: '按常规流程准备。', prescribed_fractions: 10, requested_on: '2026-10-05' },
+      { ...clinical('R3', 'P2'), diagnosis_id: idFor('D3'), request_no: 'REQ-003', title: '历史申请', body_text: '历史申请内容。', prescribed_fractions: 30, requested_on: '2026-10-05', deleted_at: SAMPLE_TIMESTAMP },
     ],
     treatmentPlans: [
       { ...clinical('T1', 'P1'), plan_request_id: idFor('R1'), plan_no: 'PLAN-001', name: '治疗计划甲', status: '计划已准备', notes: '屏气训练已完成。', planned_on: '2026-10-06' },

@@ -39,7 +39,7 @@ export async function seed({ reset = false, snapshot = baseline() }: SeedOptions
         patients: [...common, 'radiotherapy_no', 'name', 'sex', 'birth_date'],
         documents: [...clinical, 'document_type', 'title', 'body_text', 'document_on'],
         diagnoses: [...clinical, 'diagnosis_name', 'code_system', 'code_version', 'code', 'confirmation_status', 'diagnosed_on', 'source_document_id', 'summary'],
-        plan_requests: [...clinical, 'diagnosis_id', 'request_no', 'title', 'body_text', 'requested_on'],
+        plan_requests: [...clinical, 'diagnosis_id', 'request_no', 'title', 'body_text', 'requested_on', 'prescribed_fractions'],
         treatment_plans: [...clinical, 'plan_request_id', 'plan_no', 'name', 'status', 'notes', 'planned_on'],
       };
       const columns = columnsByTable[table];

@@ -16,6 +16,7 @@ export interface IndexMeta {
   syncedAt: string;
   total: number;
   typeCounts: Record<RecordType, number>;
+  supportsPatientFilters?: boolean;
   sourceReadAt?: Partial<Record<Source, string>>;
 }
 export interface ActiveBatch { index: string; meta: IndexMeta }

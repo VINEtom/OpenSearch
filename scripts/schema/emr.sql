@@ -60,6 +60,9 @@ CREATE TABLE IF NOT EXISTS plan_requests (
   CHECK (updated_at >= created_at)
 );
 
+ALTER TABLE plan_requests ADD COLUMN IF NOT EXISTS prescribed_fractions integer
+  CHECK (prescribed_fractions > 0);
+
 CREATE INDEX IF NOT EXISTS documents_patient_idx ON documents(patient_id);
 CREATE INDEX IF NOT EXISTS diagnoses_patient_idx ON diagnoses(patient_id);
 CREATE INDEX IF NOT EXISTS diagnoses_source_document_idx ON diagnoses(source_document_id, patient_id);

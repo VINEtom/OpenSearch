@@ -93,6 +93,7 @@ erDiagram
 | `title` | `text` | 是 | 申请单标题；不得为空白 |
 | `body_text` | `text` | 否 | 申请单纯文本正文；空值表示未提供正文 |
 | `requested_on` | `date` | 否 | 申请日期 |
+| `prescribed_fractions` | `integer` | 否 | 处方分次数，有值时须为正整数 |
 | `voided_at` | `timestamptz` | 否 | 作废时间 |
 
 通过联合外键 `(diagnosis_id, patient_id)` 引用 `diagnoses(id, patient_id)`，在 EMR 库内阻止申请单关联到其他患者的诊断。
@@ -187,6 +188,8 @@ erDiagram
 | `confirmationStatus`、`planStatus` | `keyword` | 相应对象的状态 |
 | `documentType` | `text`，附 `keyword` 子字段 | 可搜索的单据类型名称，精确值用于展示 |
 | `codeSystem`、`codeVersion`、`code` | `keyword` | 诊断编码三项，适用时填写 |
+| `prescribedFractions` | `integer` | 计划申请单的处方分次数 |
+| `diagnosisFilters` | `nested` | 患者文档上的确诊诊断名称、日期和直接关联有效申请单的最高分次数，用于在同一诊断内比较 |
 | `missingFields` | `keyword` 数组 | 本类型应展示但缺失的字段，如 `birthDate`、`businessDate`、`bodyText` |
 
 `title` 对应患者姓名、诊断规范名、申请单标题、单据标题或计划名称；`bodyText` 对应诊断 `summary`、申请单或单据 `body_text`、计划 `notes`。患者结果不生成虚构的临床正文。
