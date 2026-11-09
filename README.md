@@ -138,6 +138,7 @@ openspec validate --all --strict
 | --- | --- |
 | [需求说明](docs/requirements.md) | 搜索范围、结果展示、异常及验收结果 |
 | [设计说明](docs/design.md) | 原型架构、数据流、查询设计、同步及详情读取 |
+| [集成环境接入守则](docs/integration-guidelines.md) | 真实数据源、字段与权限、索引发布及验收 |
 | [表结构与索引](docs/data-model.md) | 三个数据库、五张业务表、字段约束及记录搜索索引 |
 | [交互流程](docs/interaction-flows.md) | 搜索流程、页面线框、详情关联和返回行为 |
 | [测试用例](docs/test-cases.md) | 虚构样例、预期结果及验收映射 |
