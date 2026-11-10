@@ -1,7 +1,7 @@
 import { normalizeLocalizationSite } from '../../shared/simulation-fields.js';
 import { AppError } from '../errors.js';
 import type { DiagnosisRow, DocumentRow, PatientRow, PlanRequestRow, Snapshot } from '../data.js';
-import type { PatientField, SourceDefect } from '../../shared/types.js';
+import type { PatientField, SimulationSourceFields, SourceDefect } from '../../shared/types.js';
 import { calendarDate, fieldValues, joinText, plain, timestamp } from './text.js';
 
 const stamp = '1970-01-01T00:00:00';
@@ -47,6 +47,7 @@ export interface RealDocument {
   documentOn: string | null;
   courseId: string | null;
   prescriptionId: string | null;
+  simulationSourceFields?: SimulationSourceFields;
   imagingModalityKey?: unknown;
   scanSiteList?: unknown;
   missingPrescription?: boolean;
@@ -147,6 +148,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
       ...base(row.id, row.createdAt, row.updatedAt), patient_id: row.patientId, voided_at: null,
       document_type: row.documentType, title, body_text: joinText(row.parts), document_on: calendarDate(row.documentOn),
       course_id: row.courseId, prescription_id: row.prescriptionId,
+      ...(row.documentType === '定位申请单' && row.simulationSourceFields ? { simulation_source_fields: row.simulationSourceFields } : {}),
       ...(row.documentType === '定位申请单' && 'imagingModalityKey' in row && 'scanSiteList' in row ? {
         imaging_modality: fieldValues(row.imagingModalityKey)[0]?.toUpperCase() ?? null,
         localization_sites: [...new Set(fieldValues(row.scanSiteList).map(normalizeLocalizationSite))].sort(),

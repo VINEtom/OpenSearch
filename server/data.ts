@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { fillJump } from './sources/jump.js';
 import { patientProfileText } from './sources/patient-profile.js';
 import { AppError } from './errors.js';
-import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type PatientField, type RecordDocument, type RecordType, type Relation, type Source, type SourceDefect } from '../shared/types.js';
+import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type PatientField, type RecordDocument, type RecordType, type Relation, type SimulationSourceFields, type Source, type SourceDefect } from '../shared/types.js';
 
 export interface BaseRow {
   id: string;
@@ -49,6 +49,7 @@ export interface DocumentRow extends ClinicalRow {
   prescription_id?: string | null;
   imaging_modality?: string | null;
   localization_sites?: string[];
+  simulation_source_fields?: SimulationSourceFields;
 }
 export interface TreatmentPlanRow extends ClinicalRow {
   plan_request_id: string;
@@ -304,6 +305,9 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
   if (type === 'document') {
     const value = row as DocumentRow;
     Object.assign(document, { title: value.title, bodyText: value.body_text, businessDate: value.document_on, documentType: value.document_type });
+    if (value.document_type === '定位申请单' && value.simulation_source_fields) {
+      document.simulationSourceFields = value.simulation_source_fields;
+    }
     if (value.document_type === '定位申请单' && value.imaging_modality !== undefined && value.localization_sites !== undefined) {
       document.imagingModality = value.imaging_modality;
       document.localizationSites = value.localization_sites;

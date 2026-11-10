@@ -12,6 +12,14 @@ export const DOCUMENT_CATEGORIES = ['定位申请单', '复位申请单', '计�
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
 export type SearchType = RecordType | 'all' | DocumentCategory;
 export interface PatientField { label: string; value: string }
+export interface SimulationSourceFields {
+  treatmentSites: unknown;
+  localizationCenter: unknown;
+  technique: unknown;
+  scanRemarks: unknown;
+  immobilizationRemarks: unknown;
+}
+
 export interface RecordDocument {
   id: string;
   batchId: string;
@@ -44,6 +52,7 @@ export interface RecordDocument {
   prescribedFractions?: number | null;
   imagingModality?: string | null;
   localizationSites?: string[];
+  simulationSourceFields?: SimulationSourceFields;
   patientFields?: PatientField[];
   patientProfile?: string | null;
   diagnosisFilters?: {

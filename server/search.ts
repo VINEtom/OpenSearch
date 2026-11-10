@@ -64,7 +64,7 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
     from: (params.page - 1) * 20,
     size: 20,
     track_total_hits: true,
-    _source: { excludes: ['diagnosisFilters'] },
+    _source: { excludes: ['diagnosisFilters', 'simulationSourceFields'] },
     ...(params.type === 'all' ? {} : { post_filter: documentCategories.has(params.type) ? { term: { 'documentType.keyword': params.type } } : { term: { recordType: params.type } } }),
     aggs: {
       types: { terms: { field: 'recordType', size: RECORD_TYPES.length } },

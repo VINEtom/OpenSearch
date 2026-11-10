@@ -42,6 +42,25 @@ npm run data:capture
 npm run demo:data
 ```
 
+在能连接 PMS 和 EMR 的开发环境，先重新同步，成功后再导出定位申请单的新字段。
+
+```sh
+SOURCE_MODE=real npm run sync
+SOURCE_MODE=real npm run data:capture
+```
+
+默认导出到 `.runtime/captured-search.ndjson` 和 `.runtime/captured-search.meta.json`。NDJSON 中 `documentType` 为 `定位申请单` 的记录，在 `simulationSourceFields` 下分别保存这五个字段。
+
+| EMR 字段 | 快照字段 |
+| --- | --- |
+| 治疗部位 | `treatmentSites` |
+| 定位中心 | `localizationCenter` |
+| 技术 | `technique` |
+| 扫描备注 | `scanRemarks` |
+| 固定备注 | `immobilizationRemarks` |
+
+这五项保留 EMR 查询返回的原值和空值。现有正文检索继续使用合并文本。
+
 小套虚构样例仍然可以单独生成。它只覆盖各类单据的例子，会清掉演示库并替换当前搜索结果：
 
 ```sh

@@ -82,14 +82,24 @@ test('demo details have no jump url and real templates fill the saved identifier
 
 test('projects scan sites independently of treatment sites and clinical text', () => {
   const patientId = idFor('RP1');
+  const simulationSourceFields = {
+    treatmentSites: ['脚部', '踝部'],
+    localizationCenter: null,
+    technique: 'Technique:VMAT',
+    scanRemarks: '备注 MR',
+    immobilizationRemarks: '',
+  };
   const snapshot = assembleReal(input({
     patients: [{ id: patientId, radiotherapyNo: 'PA1', name: '甲', sex: 1, birthDate: null, ...times }],
     documents: [
-      { id: idFor('RS1'), patientId, documentType: '定位申请单', title: '定位申请单', parts: ['备注 MR 脚部'], documentOn: null, courseId: null, prescriptionId: null, imagingModalityKey: 'ImagingModality:ct', scanSiteList: '["LocationSite:Head","头部","LocationSite:Neck"]', ...times },
+      { id: idFor('RS1'), patientId, documentType: '定位申请单', title: '定位申请单', parts: ['备注 MR 脚部'], documentOn: null, courseId: null, prescriptionId: null, imagingModalityKey: 'ImagingModality:ct', scanSiteList: '["LocationSite:Head","头部","LocationSite:Neck"]', simulationSourceFields, ...times },
       { id: idFor('RS2'), patientId, documentType: '复位申请单', title: '复位申请单', parts: ['CT 头部'], documentOn: null, courseId: null, prescriptionId: null, imagingModalityKey: 'CT', scanSiteList: ['头部'], ...times },
     ],
   }));
   const documents = projectRecords(snapshot, 'test').filter(row => row.recordType === 'document');
+  assert.deepEqual(documents[0].simulationSourceFields, simulationSourceFields);
+  assert.equal(documents[0].bodyText, '备注 MR 脚部');
+  assert.equal(documents[1].simulationSourceFields, undefined);
   assert.equal(documents[0].imagingModality, 'CT');
   assert.deepEqual(documents[0].localizationSites, ['Neck', '头部']);
   assert.equal(documents[1].imagingModality, undefined);

@@ -202,7 +202,17 @@ function documentFrom(row: Record<string, unknown>, documentType: string, parts:
     id: String(row.id), patientId: String(row.patientId), documentType,
     title: row.title == null ? null : String(row.title),
     parts: parts.map(name => row[name]),
-    ...(documentType === '定位申请单' ? { imagingModalityKey: row.imaging_modality_key, scanSiteList: row.scan_site_list } : {}),
+    ...(documentType === '定位申请单' ? {
+      imagingModalityKey: row.imaging_modality_key,
+      scanSiteList: row.scan_site_list,
+      simulationSourceFields: {
+        treatmentSites: row.treatment_site_name_list ?? null,
+        localizationCenter: row.localization_center ?? null,
+        technique: row.technique ?? null,
+        scanRemarks: row.scan_remarks ?? null,
+        immobilizationRemarks: row.immobilization_remarks ?? null,
+      },
+    } : {}),
     documentOn: row.documentOn == null ? null : String(row.documentOn),
     courseId: row.courseId == null ? null : String(row.courseId),
     prescriptionId: row.prescriptionId == null ? null : String(row.prescriptionId),
