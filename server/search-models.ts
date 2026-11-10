@@ -38,7 +38,7 @@ class ModelWorker {
     }
     const child = this.child;
     return new Promise(resolve => {
-      const timeout = setTimeout(() => this.reset(child), cold ? 12000 : 2500);
+      const timeout = setTimeout(() => this.reset(child), cold ? 30000 : 2500);
       this.pending = value => {
         clearTimeout(timeout);
         this.pending = undefined;

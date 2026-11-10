@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { IndexStatus, RecordDocument, SearchHit, SearchParams, SearchResponse, SearchType, Source } from '../../../shared/types';
+import type { IndexStatus, RecordDocument, SearchHit, SearchParams, SearchResponse, SearchType, Source, SourceDefect } from '../../../shared/types';
 import DetailView, { type DetailFrame, type DetailTarget } from '../components/DetailView';
-import { errorInfo, readApi, type ErrorInfo } from '../lib/api';
+import { errorInfo, postApi, readApi, type ErrorInfo } from '../lib/api';
 import { categoryLabel, CONFIRM_LABELS, displayTime, Highlight, Icon, SEARCH_CATEGORIES, SEX_LABELS, TYPE_LABELS } from '../lib/presentation';
 
 interface PatientContext { id: string; name: string; number: string }
@@ -53,6 +53,31 @@ function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: 
   </article>;
 }
 
+const DEFECT_TYPE_NAME: Record<SourceDefect['recordType'], string> = { diagnosis: '诊断', plan_request: '申请单', document: '单据' };
+
+function defectCounts(defects: SourceDefect[]): string {
+  const groups = new Map<string, Map<SourceDefect['recordType'], number>>();
+  for (const item of defects) {
+    const types = groups.get(item.reason) ?? new Map();
+    types.set(item.recordType, (types.get(item.recordType) ?? 0) + 1);
+    groups.set(item.reason, types);
+  }
+  const clause = (reason: string, types: Map<SourceDefect['recordType'], number>) => {
+    const parts = [...types.entries()].map(([type, count]) => `${count} ${reason === '治疗单关联的计划申请单不存在' ? '张治疗单' : type === 'diagnosis' ? '条诊断' : type === 'plan_request' ? '张申请单' : '张单据'}`);
+    const who = parts.length <= 1 ? parts[0] : `${parts.slice(0, -1).join('、')}和 ${parts[parts.length - 1]}`;
+    if (reason === '患者不在 PMS 中') return `${who}因为患者不在 PMS`;
+    if (reason === '申请单没有关联具体诊断') return `${who}没有关联诊断`;
+    if (reason === '治疗单关联的计划申请单不存在') return `${who}找不到对应申请单`;
+    if (reason.endsWith('为空')) return `${who}没有名称`;
+    return `${who}：${reason}`;
+  };
+  return [...groups.entries()].map(([reason, types]) => clause(reason, types)).join('；');
+}
+
+function DefectNotice({ defects }: { defects: SourceDefect[] }) {
+  return <div className="main-content status-notice"><div className="notice warning defect-notice" role="status"><details><summary><Icon name="info" size={16} /><span><strong>{defects.length} 条被隔离。</strong>其中 {defectCounts(defects)}。</span></summary><ul>{defects.map((item) => <li key={`${item.recordType}:${item.sourceId}`}>{DEFECT_TYPE_NAME[item.recordType]} {item.sourceId}</li>)}</ul></details></div></div>;
+}
+
 function SyncHelp({ onClose }: { onClose: () => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -65,7 +90,7 @@ function SyncHelp({ onClose }: { onClose: () => void }) {
   return <dialog className="sync-dialog" ref={dialogRef} aria-labelledby="sync-title" onCancel={(event) => { event.preventDefault(); onClose(); }} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="dialog-heading"><div className="dialog-icon"><Icon name="database" size={24} /></div><button className="icon-button" ref={closeRef} onClick={onClose} aria-label="关闭同步说明"><Icon name="close" /></button></div>
     <h2 id="sync-title">更新搜索数据</h2><p>搜索使用最近一次完整同步的数据，详情读取来源中的最新记录。</p>
-    <ol><li>完成虚构源数据修改后，暂停样例写入。</li><li>在原型项目根目录打开终端，执行：</li></ol><pre><code>npm run sync</code></pre><p>同步完整成功后，页面会提示“数据已更新”。点击“刷新结果”即可查看新数据。</p><div className="dialog-note"><Icon name="info" size={17} /><span>同步失败时保留上一批完整数据。请根据终端中的失败原因处理后重新执行。</span></div><button className="primary-button dialog-close" onClick={onClose}>知道了</button>
+    <p>修改源数据并暂停写入后，点击页面上的「同步数据」。也可以在项目根目录执行：</p><pre><code>npm run sync</code></pre><p>同步完整成功后，页面会提示“数据已更新”。点击“刷新结果”即可查看新数据。</p><div className="dialog-note"><Icon name="info" size={17} /><span>同步失败时保留上一批完整数据。处理失败原因后可以再次同步。</span></div><button className="primary-button dialog-close" onClick={onClose}>知道了</button>
   </dialog>;
 }
 
@@ -82,6 +107,8 @@ export default function SearchPage() {
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [showSyncHelp, setShowSyncHelp] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState<SearchParams | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
@@ -118,20 +145,13 @@ export default function SearchPage() {
 
   useEffect(() => {
     let active = true;
-    let controller: AbortController | undefined;
-    const poll = async () => {
-      controller?.abort();
-      controller = new AbortController();
-      try {
-        const value = await readApi<IndexStatus>('/index-status', controller.signal);
-        if (active) { setStatus(value); setStatusError(false); }
-      } catch (reason) {
-        if (active && !(reason instanceof Error && reason.name === 'AbortError')) setStatusError(true);
-      }
-    };
-    void poll();
-    const interval = setInterval(poll, 5000);
-    return () => { active = false; clearInterval(interval); controller?.abort(); };
+    const controller = new AbortController();
+    void readApi<IndexStatus>('/index-status', controller.signal).then((value) => {
+      if (active) { setStatus(value); setStatusError(false); }
+    }, (reason) => {
+      if (active && !(reason instanceof Error && reason.name === 'AbortError')) setStatusError(true);
+    });
+    return () => { active = false; controller.abort(); };
   }, []);
 
   const runSearch = useCallback(async (params: SearchParams, moveToResults = false) => {
@@ -224,6 +244,24 @@ export default function SearchPage() {
     window.scrollTo({ top: 0 });
     requestAnimationFrame(() => inputRef.current?.focus());
   };
+  const runSync = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      const value = await postApi<IndexStatus>('/sync');
+      setStatus(value);
+      setStatusError(false);
+    } catch (reason) {
+      if (reason instanceof Error && reason.name === 'AbortError') return;
+      setSyncError(errorInfo(reason).message);
+      try {
+        const value = await readApi<IndexStatus>('/index-status');
+        setStatus(value);
+        setStatusError(false);
+      } catch { setStatusError(true); }
+    } finally { setSyncing(false); }
+  };
   const refreshResults = () => {
     const params = appliedParams();
     setForm({ q: params.q, scope: params.scope || 'all', source: params.source || 'all', type: params.type || 'all' });
@@ -238,11 +276,12 @@ export default function SearchPage() {
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳至主要内容</a>
     <header className="app-header"><div className="header-inner"><button className="brand" onClick={returnToSearch} aria-label="OIS 返回全局搜索"><span className="brand-symbol"><span /><span /></span><strong>OIS</strong></button><nav className="top-nav" aria-label="主导航"><button className="active" onClick={returnToSearch}><Icon name="search" size={17} />全局搜索</button></nav><div className="header-right"><span className="demo-tag"><span />{status?.sourceMode === 'real' ? '真实数据' : '演示数据'}</span></div></div></header>
-    <div className="sync-strip"><div className="sync-strip-inner"><span><span className={`status-dot ${statusError || status?.state === 'unavailable' ? 'warning-dot' : ''}`} />{statusError || status?.state === 'unavailable' ? `暂时无法读取同步状态${lastSyncedAt ? ` · 最近成功同步 ${displayTime(lastSyncedAt)}` : ''}` : status?.state === 'not_synced' ? '尚未同步搜索数据' : lastSyncedAt ? `最近成功同步 ${displayTime(lastSyncedAt)}` : '正在读取同步状态…'}</span><button className="text-button" onClick={() => setShowSyncHelp(true)}><Icon name="info" size={14} />同步说明</button></div></div>
+    <div className="sync-strip"><div className="sync-strip-inner"><span><span className={`status-dot ${statusError || status?.state === 'unavailable' ? 'warning-dot' : ''}`} />{syncing ? '正在同步搜索数据…' : statusError || status?.state === 'unavailable' ? `暂时无法读取同步状态${lastSyncedAt ? ` · 最近成功同步 ${displayTime(lastSyncedAt)}` : ''}` : status?.state === 'not_synced' ? '尚未同步搜索数据' : lastSyncedAt ? `最近成功同步 ${displayTime(lastSyncedAt)}` : '正在读取同步状态…'}</span><button className="text-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button><button className="text-button" onClick={() => setShowSyncHelp(true)}><Icon name="info" size={14} />同步说明</button></div></div>
 
     {status?.lastAttempt?.status === 'failed' && <div className="main-content status-notice"><div className="notice warning" role="status"><Icon name="info" /><div><strong>最近一次同步失败{status.batchId ? '，继续使用上次完整数据' : ''}</strong><p>{status.lastAttempt.message} · {displayTime(status.lastAttempt.at)}</p></div><button className="text-button" onClick={() => setShowSyncHelp(true)}>查看同步说明</button></div></div>}
+    {syncError && syncError !== status?.lastAttempt?.message && <div className="main-content status-notice"><div className="notice warning" role="alert"><Icon name="info" /><div><strong>这次同步没有完成</strong><p>{syncError}</p></div></div></div>}
     {status?.warning && <div className="main-content status-notice"><div className="notice warning" role="status"><Icon name="info" /><p>{status.warning}</p></div></div>}
-    {!!status?.defects?.length && <div className="main-content status-notice"><div className="notice warning" role="status"><Icon name="info" /><div><strong>本次同步隔离了 {status.defects.length} 条记录</strong><p>{status.defects.slice(0, 8).map(item => `${item.recordType} ${item.sourceId}：${item.reason}`).join('；')}{status.defects.length > 8 ? '…' : ''}</p></div></div></div>}
+    {!!status?.defects?.length && <DefectNotice defects={status.defects} />}
 
     {frame ? <div id="main-content"><DetailView frame={frame} depth={stack.length} query={result?.q || ''} syncedAt={result?.syncedAt} onOpen={openDetail} onBack={goBack} onSearch={returnToSearch} onScope={scopePatient} onRefresh={refreshResults} onSyncHelp={() => setShowSyncHelp(true)} /></div> : <main className="main-content search-view" id="main-content">
       <section className="panel search-panel" aria-label="搜索条件">
@@ -268,7 +307,7 @@ export default function SearchPage() {
           {result.simulationFilters.imagingModality && <span>成像方式 · {result.simulationFilters.imagingModality}</span>}
           {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}
         </div>}
-        {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少定位申请单的字段，请从源系统重新同步后再查。</p></div>}
+        {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少定位申请单的字段，请重新同步后再查。</p><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button></div>}
         {result?.patientFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
           <span>确诊诊断 · {result.patientFilters.diagnosis}</span>
@@ -278,7 +317,7 @@ export default function SearchPage() {
         </div>}
 
         {!form.q.trim() && !result && <div className="panel empty-state compact"><h2>输入关键词开始搜索</h2></div>}
-        {form.q.trim() && notSynced && !result && <div className="panel empty-state"><div className="state-icon"><Icon name="database" size={30} /></div><h2>尚未同步搜索数据</h2><p>输入条件已保留。完成首次完整同步后即可开始搜索。</p><button className="primary-button" onClick={() => setShowSyncHelp(true)}>查看同步说明</button><button className="text-button" onClick={() => void runSearch(formParams())}>重新查询</button></div>}
+        {form.q.trim() && notSynced && !result && <div className="panel empty-state"><div className="state-icon"><Icon name="database" size={30} /></div><h2>尚未同步搜索数据</h2><p>输入条件已保留。完成首次完整同步后即可开始搜索。</p><div className="button-row"><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button><button className="text-button" onClick={() => setShowSyncHelp(true)}>查看同步说明</button></div></div>}
         {loading && !result && !notSynced && <div className="panel skeleton-list" aria-hidden="true">{[1, 2, 3].map((item) => <div className="skeleton-row" key={item}><span /><div><i /><i /><i /></div></div>)}</div>}
         {result && result.total === 0 && !result.simulationFiltersNeedSync && <div className="panel empty-state"><div className="state-icon"><Icon name="search" size={30} /></div><h2>{result.patientFilters ? '未找到符合条件的患者' : '未找到匹配记录'}</h2><p>可以修改搜索内容，或调整患者范围与来源。</p><div className="button-row"><button className="secondary-button" onClick={() => { inputRef.current?.focus(); inputRef.current?.select(); }}>修改关键词</button><button className="text-button" onClick={clearSearch}>清空关键词</button></div></div>}
         {result && result.hits.length > 0 && <div className="panel result-list">{result.hits.map((hit) => <ResultCard key={hit.id} hit={hit} query={result.q} onOpen={() => openDetail({ source: hit.source, recordType: hit.recordType, sourceId: hit.sourceId, patientId: hit.patientId, title: hit.title }, hit)} onPatient={() => openDetail({ source: 'pms', recordType: 'patient', sourceId: hit.patientId, patientId: hit.patientId, title: hit.patientName }, hit.recordType === 'patient' ? hit : undefined)} />)}</div>}

@@ -7,10 +7,10 @@ export class RequestError extends Error {
   }
 }
 
-export async function readApi<T>(path: string, signal?: AbortSignal): Promise<T> {
+async function requestApi<T>(path: string, method: 'GET' | 'POST', signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`/api/prototype${path}`, { signal, headers: { Accept: 'application/json' } });
+    response = await fetch(`/api/prototype${path}`, { method, signal, headers: { Accept: 'application/json' } });
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') throw error;
     throw new RequestError('NETWORK_ERROR', '无法连接原型服务，请检查服务是否已启动后重试。');
@@ -21,6 +21,14 @@ export async function readApi<T>(path: string, signal?: AbortSignal): Promise<T>
     throw new RequestError(error?.code || `HTTP_${response.status}`, error?.message || '服务暂时不可用，请稍后重试。', response.status);
   }
   return body as T;
+}
+
+export function readApi<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return requestApi(path, 'GET', signal);
+}
+
+export function postApi<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return requestApi(path, 'POST', signal);
 }
 
 export function errorInfo(error: unknown) {
