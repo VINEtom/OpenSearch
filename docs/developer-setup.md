@@ -1,0 +1,68 @@
+# 在另一台电脑上启动 OIS 搜索
+
+以下命令适用于 macOS、Linux 或 Windows 的 WSL2。先用虚构数据启动网页，再按需要配置 PMS、EMR 和本地模型。
+
+## 1. 下载代码并启动基础服务
+
+准备 Git、Docker（含 Compose）和 Node.js 22.22.3（见 `.nvmrc`）。启动 Docker 后，在终端执行：
+
+```sh
+git clone https://github.com/VINEtom/OpenSearch.git
+cd OpenSearch
+npm ci
+[ -f .env ] || cp .env.example .env
+npm run infra:up
+```
+
+Compose 会启动本机 PostgreSQL（54329）和 OpenSearch（9207）。已有项目时，在自己的开发分支安排同步，并保留原有 `.env`。
+
+## 2. 选择数据来源
+
+- **用虚构数据开发。** 保持 `.env` 中的 `SOURCE_MODE=demo`。在新建的空库中依次运行 `npm run db:init`、`npm run db:seed`、`npm run sync`。
+- **连接开发环境的 PMS 和 EMR。** 在 `.env` 设置 `SOURCE_MODE=real`，填入 `REAL_PGHOST`、`REAL_PGPORT`、`REAL_PGUSER`、`REAL_PGPASSWORD`、`REAL_PMS_DATABASE` 和 `REAL_EMR_DATABASE`。使用能读两个开发库的账号，执行 `npm run sync`。
+
+运行 `npm run dev` 后打开 [搜索网页](http://127.0.0.1:8107)，也可以查看 [API 健康状态](http://127.0.0.1:4107/api/prototype/health)和[索引同步状态](http://127.0.0.1:4107/api/prototype/index-status)。基础搜索和同步可以在 `.env` 设置 `SEARCH_MODELS=off`，无需 Python。
+
+## 3. 启用 BERT 和 BGE
+
+在运行 Node 搜索后端的同一台机器或容器准备 Python。本机验证使用 Python 3.13.12。可在 [GitHub Release](https://github.com/VINEtom/OpenSearch/releases/tag/search-models-v1) 下载两套模型及校验文件。在下载目录执行下列命令，校验通过后解压到项目内的 `.runtime/models`：
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+以下命令从项目根目录运行，将 `/path/to/downloads` 换成实际下载目录：
+
+```sh
+mkdir -p .runtime/models
+tar -xzf /path/to/downloads/ois-bert-checkpoint.tar.gz -C .runtime/models
+tar -xzf /path/to/downloads/ois-bge-reranker.tar.gz -C .runtime/models
+python3.13 -m venv .runtime/bert-venv
+python3.13 -m venv .runtime/bge-venv
+.runtime/bert-venv/bin/python -m pip install torch==2.15.0 transformers==5.22.2
+.runtime/bge-venv/bin/python -m pip install onnxruntime==1.31.1 numpy==2.5.4 tokenizers==0.23.3
+```
+
+在 `.env` 填入以下配置，把 `/abs/path/OpenSearch` 换成项目的绝对路径。若已有 `SEARCH_MODELS=off`，删除该行或改为 `SEARCH_MODELS=on`。
+
+```dotenv
+SEARCH_BERT_PYTHON=/abs/path/OpenSearch/.runtime/bert-venv/bin/python
+SEARCH_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/bert-checkpoint
+SEARCH_BGE_PYTHON=/abs/path/OpenSearch/.runtime/bge-venv/bin/python
+SEARCH_BGE_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/bge-reranker
+```
+
+重启 `npm run dev`。搜索后端会按需加载模型。将 `.env` 和包含业务记录的本地快照留在本机。
+
+## 4. 验证模型和网页
+
+先从项目根目录直接检查两个推理脚本能否加载权重：
+
+```sh
+printf '%s\n' '{"query":"找成像方式为 CT 的定位申请单"}' |
+  .runtime/bert-venv/bin/python scripts/search-model.py bert .runtime/models/bert-checkpoint
+printf '%s\n' '{"query":"趴着摆位","passages":["患者俯卧，面朝下","患者仰卧，面朝上"]}' |
+  .runtime/bge-venv/bin/python scripts/search-model.py reranker .runtime/models/bge-reranker
+```
+
+BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值。网页端使用新版 EMR 索引，搜索「找成像方式为 CT、备注里说要趴着摆位的定位申请单」，检查 CT 筛选、BERT 核对标记和「相关正文」。BGE 重排当前页的候选单据。普通虚构种子可用于验证基础搜索，当前种子缺少这一组合查询所需的独立定位字段。看到「需要重新同步搜索数据」时，检查当前索引是否由新版代码从 EMR 同步生成。完整验收见 [集成验收文档](search-integration-next-steps.md)。
