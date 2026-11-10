@@ -25,7 +25,7 @@ DOCKER_CONTEXT=colima-ois-search npm run infra:up
 docker --context colima-ois-search compose ps
 ```
 
-在其他机器上，使用已启动的 Docker context 运行 `npm run infra:up` 即可。Compose 启动 PostgreSQL 16.11 和 OpenSearch 3.9.0，并等待两个服务健康。
+在其他机器上，使用已启动的 Docker context 运行 `npm run infra:up` 即可。Compose 启动 PostgreSQL 16.11、OpenSearch 3.9.0 和 OpenSearch Dashboards 3.9.0，并等待数据库与搜索服务健康。
 
 首次创建并导入基线样例：
 
@@ -62,6 +62,7 @@ npm run dev
 | 本地接口 | [健康检查](http://127.0.0.1:4107/api/prototype/health)、[同步状态](http://127.0.0.1:4107/api/prototype/index-status) |
 | PostgreSQL | `127.0.0.1:54329`，独立数据库 `pms_demo`、`emr_demo`、`rvs_demo` |
 | OpenSearch | [http://127.0.0.1:9207](http://127.0.0.1:9207) |
+| OpenSearch Dashboards | [http://127.0.0.1:5607](http://127.0.0.1:5607) |
 
 连接配置见 [.env.example](.env.example)，本地修改保存在 `.env`。数据库名固定为三个原型库，初始化、导入和查询都会检查目标名称。
 
@@ -154,6 +155,7 @@ openspec validate --all --strict
 | 文档 | 内容 |
 | --- | --- |
 | [需求说明](docs/requirements.md) | 搜索范围、结果展示、异常及验收结果 |
+| [可搜索字段](docs/search-fields.md) | 当前能搜到的字段及匹配方式 |
 | [设计说明](docs/design.md) | 原型架构、数据流、查询设计、同步及详情读取 |
 | [集成环境接入守则](docs/integration-guidelines.md) | 真实数据源、字段与权限、索引发布及验收 |
 | [表结构与索引](docs/data-model.md) | 三个数据库、五张业务表、字段约束及记录搜索索引 |

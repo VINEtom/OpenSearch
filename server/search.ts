@@ -3,7 +3,7 @@ import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchFie
 import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { diagnosisValueSet } from './diagnosis-terminology.js';
-import { parsePatientQuery } from './patient-query.js';
+import { parsePatientQuery, parseSexQuery } from './patient-query.js';
 import { confirmWithBert, rerankHits } from './search-models.js';
 import { parseSimulationClue, parseSimulationQuery } from './simulation-query.js';
 import { osRequest } from './opensearch.js';
@@ -43,9 +43,10 @@ const textFields = {
   patientName: { boost: 4, highlight: { number_of_fragments: 0 } },
   documentType: { boost: 2, highlight: { number_of_fragments: 0 } },
   bodyText: { boost: 1, highlight: { fragment_size: 200, number_of_fragments: 1, boundary_scanner: 'sentence' } },
+  patientProfile: { boost: 2, highlight: { fragment_size: 120, number_of_fragments: 1 } },
 };
 
-export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string) {
+export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
   const queryFields = fields.map(([field, options]) => `${field}^${options.boost}`);
@@ -81,6 +82,13 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
         ...(simulationFilters.localizationSite ? [{ term: { localizationSites: simulationFilters.localizationSite } }] : []),
       ], ...(clue ? { should: [{ match: { bodyText: clue } }] } : {}) } },
       sort: [...(clue ? [{ _score: 'desc' }] : []), { updatedAt: 'desc' }, { id: 'asc' }],
+    };
+  }
+  if (sex) {
+    return {
+      ...resultWindow,
+      query: { bool: { filter: [...filters, { term: { recordType: 'patient' } }, { term: { sex } }] } },
+      sort: [{ radiotherapyNo: 'asc' }, { id: 'asc' }],
     };
   }
   if (patientFilters) {
@@ -121,6 +129,7 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       filter: filters,
       should: [
         ...['radiotherapyNo', 'recordNo', 'code'].map(field => ({ term: { [field]: { value: params.q, boost: 10 } } })),
+        { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'patientFields', size: 5, _source: ['label', 'value'] } } },
         { multi_match: { query: params.q, fields: queryFields, type: 'best_fields', operator: 'and' } },
       ],
       minimum_should_match: 1,
@@ -159,6 +168,25 @@ export function parseMarkedHighlight(value: string, openMarker: string, closeMar
 
 const titleLabels: Record<RecordType, string> = { patient: '姓名', diagnosis: '诊断名称', plan_request: '申请单标题', treatment_plan: '计划名称', document: '单据标题' };
 const bodyLabels: Record<RecordType, string> = { patient: '资料', diagnosis: '诊断说明', plan_request: '申请内容', treatment_plan: '计划备注', document: '正文' };
+export function matchedPatientFields(query: string, fields: { label: string; value: string }[] = []): MatchField[] {
+  const needle = query.toLocaleLowerCase();
+  if (!needle) return [];
+  const matches: MatchField[] = [];
+  for (const field of fields) {
+    const lower = field.value.toLocaleLowerCase();
+    const ranges: [number, number][] = [];
+    let from = 0;
+    while (from < lower.length) {
+      const at = lower.indexOf(needle, from);
+      if (at < 0) break;
+      ranges.push([at, at + needle.length]);
+      from = at + needle.length;
+    }
+    if (ranges.length) matches.push({ field: 'patientFields', label: field.label, text: field.value, ranges });
+  }
+  return matches;
+}
+
 export function fieldLabel(field: string, type: RecordType): string {
   if (field === 'title') return titleLabels[type];
   if (field === 'bodyText') return bodyLabels[type];
@@ -168,7 +196,7 @@ export function fieldLabel(field: string, type: RecordType): string {
 interface EngineResponse {
   timed_out?: boolean;
   _shards: { failed: number };
-  hits: { total: { value: number; relation: string }; hits: { _source: RecordDocument; highlight?: Record<string, string[]> }[] };
+  hits: { total: { value: number; relation: string }; hits: { _source: RecordDocument; highlight?: Record<string, string[]>; inner_hits?: { patientFields?: { hits: { hits: { _source?: { label?: string; value?: string } }[] } } } }[] };
   aggregations: { types: { buckets: { key: RecordType; doc_count: number }[] }; documentTypes?: { buckets: { key: string; doc_count: number }[] } };
 }
 
@@ -193,7 +221,8 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         elapsedMs: Math.round(performance.now() - started),
       };
     }
-    const patientFilters = simulationFilters ? undefined : parsePatientQuery(params.q);
+    const sexFilter = simulationFilters ? undefined : parseSexQuery(params.q);
+    const patientFilters = simulationFilters || sexFilter ? undefined : parsePatientQuery(params.q);
     if (patientFilters && !batch.meta.supportsDiagnosisCoding) {
       throw new AppError('PATIENT_FILTER_SYNC_REQUIRED', '请先同步搜索数据，再按确诊日期查询。', 409);
     }
@@ -203,7 +232,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;
-    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, mixed?.clue));
+    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, mixed?.clue, sexFilter?.sex));
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
@@ -216,13 +245,24 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         const value = record[field];
         if (value === params.q) matchedFields.push({ field, label: fieldLabel(field, record.recordType), text: value, ranges: [[0, value.length]] });
       }
+      for (const inner of hit.inner_hits?.patientFields?.hits.hits ?? []) {
+        const label = inner._source?.label;
+        const value = inner._source?.value;
+        if (label && value) matchedFields.push({ field: 'patientFields', label, text: value, ranges: [[0, value.length]] });
+      }
       for (const field of Object.keys(textFields)) {
         const fragment = hit.highlight?.[`${field}.han`]?.[0] ?? hit.highlight?.[field]?.[0];
-        if (fragment) {
-          const parsed = parseMarkedHighlight(fragment, openMarker, closeMarker);
-          if (parsed.ranges.length) matchedFields.push({ field, label: fieldLabel(field, record.recordType), ...parsed });
+        if (!fragment) continue;
+        if (field === 'patientProfile') {
+          for (const match of matchedPatientFields(params.q, record.patientFields)) {
+            if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push(match);
+          }
+          continue;
         }
+        const parsed = parseMarkedHighlight(fragment, openMarker, closeMarker);
+        if (parsed.ranges.length) matchedFields.push({ field, label: fieldLabel(field, record.recordType), ...parsed });
       }
+      if (sexFilter) matchedFields.unshift({ field: 'sex', label: '性别', text: sexFilter.label, ranges: [[0, sexFilter.label.length]] });
       return { ...record, matchedFields };
     });
     const textForRanking = mixed?.clue ?? (!simulationFilters && !patientFilters && params.q.length >= 10
@@ -231,7 +271,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       mixed && hits.length ? confirmWithBert(mixed.fieldQuery, mixed.filters) : undefined,
       textForRanking ? rerankHits(textForRanking, hits) : hits,
     ]);
-    return { ...params, ...(simulationBertConfirmed ? { simulationBertConfirmed } : {}), ...(patientFilters ? { patientFilters } : {}), ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: rankedHits, elapsedMs: Math.round(performance.now() - started) };
+    return { ...params, ...(simulationBertConfirmed ? { simulationBertConfirmed } : {}), ...(sexFilter ? { sexFilter } : {}), ...(patientFilters ? { patientFilters } : {}), ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: rankedHits, elapsedMs: Math.round(performance.now() - started) };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('SEARCH_UNAVAILABLE', '搜索服务暂时不可用，请检查本地服务后重试。', 503);

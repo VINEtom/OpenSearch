@@ -1,7 +1,7 @@
 import { normalizeLocalizationSite } from '../../shared/simulation-fields.js';
 import { AppError } from '../errors.js';
 import type { DiagnosisRow, DocumentRow, PatientRow, PlanRequestRow, Snapshot } from '../data.js';
-import type { SourceDefect } from '../../shared/types.js';
+import type { PatientField, SourceDefect } from '../../shared/types.js';
 import { calendarDate, fieldValues, joinText, plain, timestamp } from './text.js';
 
 const stamp = '1970-01-01T00:00:00';
@@ -13,6 +13,7 @@ export interface RealPatient {
   birthDate: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+  fields?: PatientField[];
 }
 export interface RealDiagnosis {
   id: string;
@@ -85,6 +86,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
     patients.set(row.id, {
       ...base(row.id, row.createdAt, row.updatedAt),
       radiotherapy_no: radiotherapyNo, name, sex: sexOf(row.sex), birth_date: calendarDate(row.birthDate),
+      ...(row.fields?.length ? { fields: row.fields } : {}),
     });
   }
   function keptPatient(recordType: SourceDefect['recordType'], id: string, patientId: string): boolean {

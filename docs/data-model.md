@@ -189,6 +189,8 @@ erDiagram
 | `documentType` | `text`，附 `keyword` 子字段 | 可搜索的单据类型名称，精确值用于展示 |
 | `codeSystem`、`codeVersion`、`code` | `keyword` | 诊断编码三项，适用时填写 |
 | `prescribedFractions` | `integer` | 计划申请单的处方分次数 |
+| `patientFields` | `nested` | 患者文档上患者信息页的业务字段，`label` 为字段名，`value` 精确匹配。主诊、主管、住院医生和物理师存同步时查到的姓名。不含照片，也不含由出生日期推算的年龄 |
+| `patientProfile` | `text` | 患者姓名、地址、备注等文字字段的检索正文。证件号和电话只在 `patientFields` 中精确匹配 |
 | `diagnosisFilters` | `nested` | 患者文档上的确诊诊断名称、日期、编码体系、编码及直接关联有效申请单的最高分次数，用于在同一诊断内比较 |
 | `missingFields` | `keyword` 数组 | 本类型应展示但缺失的字段，如 `birthDate`、`businessDate`、`bodyText` |
 

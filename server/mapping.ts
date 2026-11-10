@@ -10,6 +10,8 @@ export const recordProperties = {
   bodyText: { type: 'text', analyzer: 'cjk', fields: { han } }, businessDate: { type: 'date', format: 'strict_date' }, updatedAt: { type: 'date' },
   prescribedFractions: { type: 'integer' },
   imagingModality: { type: 'keyword' }, localizationSites: { type: 'keyword' },
+  patientFields: { type: 'nested', properties: { label: { type: 'keyword' }, value: { type: 'keyword', ignore_above: 512 } } },
+  patientProfile: { type: 'text', analyzer: 'cjk', fields: { han } },
   diagnosisFilters: { type: 'nested', properties: {
     name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
     codingSystem: { type: 'keyword' }, code: { type: 'keyword' },
