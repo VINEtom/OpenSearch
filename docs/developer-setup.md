@@ -75,3 +75,26 @@ printf '%s\n' '{"query":"趴着摆位","passages":["患者俯卧，面朝下","�
 BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值，第一项对应俯卧片段，分数应更高。网页端使用新版 EMR 索引，搜索「找成像方式为 CT、备注里说要趴着摆位的定位申请单」，检查 CT 筛选、BERT 核对标记和「相关正文」。BGE 重排当前页的候选单据。普通虚构种子可用放疗号 `000123` 验证基础搜索，应找到「林示例」。当前种子缺少这一组合查询所需的独立定位字段。看到「需要重新同步搜索数据」时，检查当前索引是否由新版代码从 EMR 同步生成。完整验收见 [集成验收文档](search-integration-next-steps.md)。
 
 已在 macOS ARM64 的全新克隆、独立 Compose 数据卷和新建 Python 虚拟环境验证。普通种子通过网页基础搜索。另用带结构化字段的虚构定位单验证 BERT 核对、BGE 重排和相关正文展示。Linux、WSL2 和真实 EMR 连接未在这次验证中测试。
+
+## WSL2 x64 离线安装 Python 依赖
+
+在 WSL 终端运行 `uname -m` 和 `python3.13 --version`。离线包适用于输出 `x86_64`、使用 CPython 3.13 的 Linux 发行版，要求 glibc 2.28 或更新版本。Python 解释器和 `venv` 模块需事先安装。
+
+从[模型 Release](https://github.com/VINEtom/OpenSearch/releases/tag/search-models-v1)下载 `ois-python-wheels-linux-x86_64-cp313.tar.gz` 和 `SHA256SUMS-linux-x86_64-cp313.txt`，在下载目录校验：
+
+```sh
+sha256sum -c SHA256SUMS-linux-x86_64-cp313.txt
+```
+
+在项目根目录执行以下命令。将 `/path/to/downloads` 换成实际下载目录：
+
+```sh
+mkdir -p .runtime/wheels
+tar -xzf /path/to/downloads/ois-python-wheels-linux-x86_64-cp313.tar.gz -C .runtime/wheels
+python3.13 -m venv .runtime/bert-venv
+python3.13 -m venv .runtime/bge-venv
+.runtime/bert-venv/bin/python -m pip install --no-index --find-links .runtime/wheels/bert 'torch==2.15.0+cpu' transformers==5.22.2
+.runtime/bge-venv/bin/python -m pip install --no-index --find-links .runtime/wheels/bge onnxruntime==1.31.1 numpy==2.5.4 tokenizers==0.23.3
+```
+
+模型权重仍按第 3 节另行下载和解压。安装完成后配置相同的四个模型路径，再运行第 4 节的自检。两个环境均使用 CPU。
