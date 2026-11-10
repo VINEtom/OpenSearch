@@ -18,6 +18,7 @@ export interface IndexMeta {
   typeCounts: Record<RecordType, number>;
   supportsPatientFilters?: boolean;
   supportsDiagnosisCoding?: boolean;
+  supportsSimulationFilters?: boolean;
   sourceReadAt?: Partial<Record<Source, string>>;
 }
 export interface ActiveBatch { index: string; meta: IndexMeta }

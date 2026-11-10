@@ -41,6 +41,8 @@ export interface RecordDocument {
   codeVersion: string | null;
   code: string | null;
   prescribedFractions?: number | null;
+  imagingModality?: string | null;
+  localizationSites?: string[];
   diagnosisFilters?: {
     name: string;
     diagnosedOn: string;
@@ -73,7 +75,13 @@ export interface PatientSearchFilters {
   minimumFractions?: number;
   codingSystems?: string[];
 }
+export interface SimulationSearchFilters {
+  imagingModality?: string;
+  localizationSite?: string;
+}
 export interface SearchResponse {
+  simulationFilters?: SimulationSearchFilters;
+  simulationFiltersNeedSync?: boolean;
   patientFilters?: PatientSearchFilters;
   q: string;
   scope: 'all' | 'patient';

@@ -1,3 +1,4 @@
+import { parseSimulationQuery } from '../server/simulation-query.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePatientQuery } from '../server/patient-query.js';
@@ -52,4 +53,18 @@ test('recognizes confirmed diagnosis dates without adding a prescription constra
   assert.deepEqual(parsePatientQuery('最近10个月确诊鼻咽癌', new Date('2026-11-09T08:00:00Z')), {
     diagnosis: '鼻咽癌', diagnosedFrom: '2026-01-09', diagnosedThrough: '2026-11-09',
   });
+});
+
+test('parses two exact simulation fields without turning ordinary text into a field query', () => {
+  assert.deepEqual(parseSimulationQuery('定位方式是 CT'), { imagingModality: 'CT' });
+  assert.deepEqual(parseSimulationQuery('定位部位是头部'), { localizationSite: '头部' });
+  assert.deepEqual(parseSimulationQuery('找定位部位是Head、成像方式为ｃｔ的定位申请单'), { localizationSite: '头部', imagingModality: 'CT' });
+  assert.equal(parseSimulationQuery('头部 CT 定位申请单'), undefined);
+  assert.equal(parseSimulationQuery('定位方式是 CT，定位方式是 MR'), undefined);
+  const params = validateSearchParams({ q: '定位方式是 CT 且定位部位是头部' });
+  const query = buildSearchQuery(params, 'OPEN', 'CLOSE', undefined, parseSimulationQuery(params.q));
+  assert.deepEqual(query.query.bool.filter, [
+    { term: { recordType: 'document' } }, { term: { 'documentType.keyword': '定位申请单' } },
+    { term: { imagingModality: 'CT' } }, { term: { localizationSites: '头部' } },
+  ]);
 });

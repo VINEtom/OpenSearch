@@ -17,6 +17,10 @@ function pieces(value: unknown): string[] {
   return text ? [text] : [];
 }
 
+export function fieldValues(value: unknown): string[] {
+  return [...new Set(pieces(value).map(text => text.normalize('NFKC')))].sort();
+}
+
 /** Join the supplied values in order. Empty values and empty JSON arrays are omitted. */
 export function joinText(values: unknown[]): string | null {
   const text = values.flatMap(pieces);

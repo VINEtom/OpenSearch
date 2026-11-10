@@ -229,3 +229,12 @@ erDiagram
 
 - [OpenSearch CJK 分析器](https://docs.opensearch.org/latest/analyzers/language-analyzers/cjk/)：使用内置分析器建立中文文本检索基线。
 - [OpenSearch Manage Aliases API](https://docs.opensearch.org/latest/api-reference/alias/aliases-api/)：在一次原子操作中移除旧指向并添加新指向，用于发布完整记录索引。
+
+### 定位申请单筛选字段
+
+| EMR 源字段 | 搜索字段 | 匹配方式 |
+| --- | --- | --- |
+| `imaging_modality_key` | `imagingModality` | 大写代码精确匹配，如 `CT` |
+| `scan_site_list` | `localizationSites` | 列表内任一部位精确匹配，`LocationSite:Head` 统一为「头部」 |
+
+两个搜索字段均为 `keyword`。同步从 EMR 独立取值；旧搜索快照的正文没有保存字段边界，需要从 EMR 重新同步。

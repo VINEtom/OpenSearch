@@ -93,7 +93,7 @@ export default function SearchPage() {
   const dirty = !!result && !sameConditions(form, result, patient);
   const newerBatch = !!result && !!status?.batchId && status.batchId !== result.batchId;
   const visibleCategories = SEARCH_CATEGORIES.filter((item) => form.source === 'all' || item.source === form.source);
-  const countConditionsMatch = !!result && form.q.trim() === result.q && form.scope === result.scope && form.source === result.source && (form.scope === 'all' || patient?.id === result.patientId);
+  const countConditionsMatch = !!result && !result.simulationFiltersNeedSync && form.q.trim() === result.q && form.scope === result.scope && form.source === result.source && (form.scope === 'all' || patient?.id === result.patientId);
   const notSynced = status?.state === 'not_synced' || error?.code === 'NOT_SYNCED';
   const lastSyncedAt = status?.syncedAt || result?.syncedAt;
 
@@ -258,8 +258,15 @@ export default function SearchPage() {
 
         {error && !notSynced && <div className="notice error-notice" role="alert"><Icon name="info" /><div><strong>{batchUnavailable ? '原查询批次已不可用，请重新查询' : '查询失败'}</strong><p>{error.message}{result ? ` 下方保留上次成功结果（${displayTime(receivedAt)}）。` : ''}</p></div><button className="secondary-button" onClick={() => batchUnavailable ? refreshResults() : void runSearch(attempted || formParams())}>{batchUnavailable ? '重新查询' : '重试'}</button></div>}
 
-        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong><span>共 <b>{result.total}</b> {result.patientFilters ? '位患者' : '条记录'}</span><span className="applied-conditions">{resultScope}<i />{result.source === 'all' ? '全部来源' : result.source.toUpperCase()}<i />{categoryLabel(result.type)}</span></div></div>}
+        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong>{!result.simulationFiltersNeedSync && <span>共 <b>{result.total}</b> {result.patientFilters ? '位患者' : '条记录'}</span>}<span className="applied-conditions">{resultScope}<i />{result.source === 'all' ? '全部来源' : result.source.toUpperCase()}<i />{categoryLabel(result.type)}</span></div></div>}
 
+        {result?.simulationFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
+          <strong>识别出的筛选条件</strong>
+          <span>单据类型 · 定位申请单</span>
+          {result.simulationFilters.imagingModality && <span>成像方式 · {result.simulationFilters.imagingModality}</span>}
+          {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}
+        </div>}
+        {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少定位申请单的字段，请从源系统重新同步后再查。</p></div>}
         {result?.patientFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
           <span>确诊诊断 · {result.patientFilters.diagnosis}</span>
@@ -271,7 +278,7 @@ export default function SearchPage() {
         {!form.q.trim() && !result && <div className="panel empty-state compact"><h2>输入关键词开始搜索</h2></div>}
         {form.q.trim() && notSynced && !result && <div className="panel empty-state"><div className="state-icon"><Icon name="database" size={30} /></div><h2>尚未同步搜索数据</h2><p>输入条件已保留。完成首次完整同步后即可开始搜索。</p><button className="primary-button" onClick={() => setShowSyncHelp(true)}>查看同步说明</button><button className="text-button" onClick={() => void runSearch(formParams())}>重新查询</button></div>}
         {loading && !result && !notSynced && <div className="panel skeleton-list" aria-hidden="true">{[1, 2, 3].map((item) => <div className="skeleton-row" key={item}><span /><div><i /><i /><i /></div></div>)}</div>}
-        {result && result.total === 0 && <div className="panel empty-state"><div className="state-icon"><Icon name="search" size={30} /></div><h2>{result.patientFilters ? '未找到符合条件的患者' : '未找到匹配记录'}</h2><p>可以修改搜索内容，或调整患者范围与来源。</p><div className="button-row"><button className="secondary-button" onClick={() => { inputRef.current?.focus(); inputRef.current?.select(); }}>修改关键词</button><button className="text-button" onClick={clearSearch}>清空关键词</button></div></div>}
+        {result && result.total === 0 && !result.simulationFiltersNeedSync && <div className="panel empty-state"><div className="state-icon"><Icon name="search" size={30} /></div><h2>{result.patientFilters ? '未找到符合条件的患者' : '未找到匹配记录'}</h2><p>可以修改搜索内容，或调整患者范围与来源。</p><div className="button-row"><button className="secondary-button" onClick={() => { inputRef.current?.focus(); inputRef.current?.select(); }}>修改关键词</button><button className="text-button" onClick={clearSearch}>清空关键词</button></div></div>}
         {result && result.hits.length > 0 && <div className="panel result-list">{result.hits.map((hit) => <ResultCard key={hit.id} hit={hit} query={result.q} onOpen={() => openDetail({ source: hit.source, recordType: hit.recordType, sourceId: hit.sourceId, patientId: hit.patientId, title: hit.title }, hit)} onPatient={() => openDetail({ source: 'pms', recordType: 'patient', sourceId: hit.patientId, patientId: hit.patientId, title: hit.patientName }, hit.recordType === 'patient' ? hit : undefined)} />)}</div>}
         {result && result.total > 0 && <div className="pagination"><span>第 {(result.page - 1) * result.pageSize + 1}–{Math.min(result.page * result.pageSize, result.total)} 条，共 {result.total} 条<span className="page-size">每页 20 条</span></span><div><button className="secondary-button" disabled={result.page <= 1 || loading || dirty} onClick={() => void runSearch({ ...appliedParams(), page: result.page - 1, batchId: result.batchId }, true)}>上一页</button><span className="page-counter">{result.page} <span>/ {Math.ceil(result.total / result.pageSize)}</span></span><button className="secondary-button" disabled={result.page * result.pageSize >= result.total || loading || dirty} onClick={() => void runSearch({ ...appliedParams(), page: result.page + 1, batchId: result.batchId }, true)}>下一页</button></div></div>}
       </section>

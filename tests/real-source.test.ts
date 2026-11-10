@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { baseline, idFor } from '../fixtures/samples.js';
-import { detailFromSnapshot, validateSnapshot } from '../server/data.js';
+import { detailFromSnapshot, projectRecords, validateSnapshot } from '../server/data.js';
 import { assembleReal, type RealInput } from '../server/sources/assemble.js';
 import { fillJump } from '../server/sources/jump.js';
 import { joinText } from '../server/sources/text.js';
@@ -78,4 +78,20 @@ test('demo details have no jump url and real templates fill the saved identifier
   const url = fillJump({ JUMP_EMR_PLAN_REQUEST: 'http://emr/order?courseId={courseId}&id={sourceId}&patientGuid={patientId}' }, 'plan_request', '', { sourceId: 'r1', patientId: 'p1', courseId: 'c1' });
   assert.equal(url, 'http://emr/order?courseId=c1&id=r1&patientGuid=p1');
   assert.equal(fillJump({}, 'plan_request', '', { sourceId: 'r1', patientId: 'p1' }), null);
+});
+
+test('projects scan sites independently of treatment sites and clinical text', () => {
+  const patientId = idFor('RP1');
+  const snapshot = assembleReal(input({
+    patients: [{ id: patientId, radiotherapyNo: 'PA1', name: '甲', sex: 1, birthDate: null, ...times }],
+    documents: [
+      { id: idFor('RS1'), patientId, documentType: '定位申请单', title: '定位申请单', parts: ['备注 MR 脚部'], documentOn: null, courseId: null, prescriptionId: null, imagingModalityKey: 'ImagingModality:ct', scanSiteList: '["LocationSite:Head","头部","LocationSite:Neck"]', ...times },
+      { id: idFor('RS2'), patientId, documentType: '复位申请单', title: '复位申请单', parts: ['CT 头部'], documentOn: null, courseId: null, prescriptionId: null, imagingModalityKey: 'CT', scanSiteList: ['头部'], ...times },
+    ],
+  }));
+  const documents = projectRecords(snapshot, 'test').filter(row => row.recordType === 'document');
+  assert.equal(documents[0].imagingModality, 'CT');
+  assert.deepEqual(documents[0].localizationSites, ['Neck', '头部']);
+  assert.equal(documents[1].imagingModality, undefined);
+  assert.equal(documents[1].localizationSites, undefined);
 });

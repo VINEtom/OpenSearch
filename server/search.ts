@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type Source } from '../shared/types.js';
+import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type SimulationSearchFilters, type Source } from '../shared/types.js';
 import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { diagnosisValueSet } from './diagnosis-terminology.js';
 import { parsePatientQuery } from './patient-query.js';
+import { parseSimulationQuery } from './simulation-query.js';
 import { osRequest } from './opensearch.js';
 
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -43,7 +44,7 @@ const textFields = {
   bodyText: { boost: 1, highlight: { fragment_size: 200, number_of_fragments: 1, boundary_scanner: 'sentence' } },
 };
 
-export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters) {
+export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
   const queryFields = fields.map(([field, options]) => `${field}^${options.boost}`);
@@ -68,6 +69,19 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       documentTypes: { terms: { field: 'documentType.keyword', size: 30 } },
     },
   };
+  if (simulationFilters) {
+    return {
+      ...resultWindow,
+      query: { bool: { filter: [
+        ...filters,
+        { term: { recordType: 'document' } },
+        { term: { 'documentType.keyword': '定位申请单' } },
+        ...(simulationFilters.imagingModality ? [{ term: { imagingModality: simulationFilters.imagingModality } }] : []),
+        ...(simulationFilters.localizationSite ? [{ term: { localizationSites: simulationFilters.localizationSite } }] : []),
+      ] } },
+      sort: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    };
+  }
   if (patientFilters) {
     const { diagnosis, diagnosedFrom, diagnosedThrough, minimumFractions } = patientFilters;
     const valueSet = diagnosisValueSet(diagnosis);
@@ -168,7 +182,16 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
   const started = performance.now();
   try {
     const batch = await resolveBatch(params.batchId);
-    const patientFilters = parsePatientQuery(params.q);
+    const simulationFilters = parseSimulationQuery(params.q);
+    if (simulationFilters && !batch.meta.supportsSimulationFilters) {
+      return {
+        ...params, simulationFilters, simulationFiltersNeedSync: true, pageSize: 20, total: 0,
+        typeCounts: Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>,
+        categoryCounts: {}, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: [],
+        elapsedMs: Math.round(performance.now() - started),
+      };
+    }
+    const patientFilters = simulationFilters ? undefined : parsePatientQuery(params.q);
     if (patientFilters && !batch.meta.supportsDiagnosisCoding) {
       throw new AppError('PATIENT_FILTER_SYNC_REQUIRED', '请先同步搜索数据，再按确诊日期查询。', 409);
     }
@@ -178,7 +201,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;
-    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters));
+    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters));
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
@@ -200,7 +223,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       }
       return { ...record, matchedFields };
     });
-    return { ...params, ...(patientFilters ? { patientFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits, elapsedMs: Math.round(performance.now() - started) };
+    return { ...params, ...(patientFilters ? { patientFilters } : {}), ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits, elapsedMs: Math.round(performance.now() - started) };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('SEARCH_UNAVAILABLE', '搜索服务暂时不可用，请检查本地服务后重试。', 503);

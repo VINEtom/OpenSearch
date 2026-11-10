@@ -68,7 +68,10 @@ export async function publishRecords(records: RecordDocument[], options: SyncOpt
     const stamped = withDiagnosisFilters(records.map(record => ({ ...record, batchId })));
     newIndex = `${config.indexAlias}-${batchId}`;
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, stamped.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
-    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, supportsDiagnosisCoding: true, sourceReadAt: options.sourceReadAt };
+    const simulations = stamped.filter(row => row.recordType === 'document' && row.documentType === '定位申请单');
+    const supportsSimulationFilters = simulations.length > 0
+      && simulations.every(row => row.imagingModality !== undefined && row.localizationSites !== undefined);
+    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, supportsDiagnosisCoding: true, supportsSimulationFilters, sourceReadAt: options.sourceReadAt };
     await osRequest(`/${newIndex}`, 'PUT', {
       settings: { index: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '-1' } },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },

@@ -45,6 +45,8 @@ export interface DocumentRow extends ClinicalRow {
   document_on: string | null;
   course_id?: string | null;
   prescription_id?: string | null;
+  imaging_modality?: string | null;
+  localization_sites?: string[];
 }
 export interface TreatmentPlanRow extends ClinicalRow {
   plan_request_id: string;
@@ -290,6 +292,10 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
   if (type === 'document') {
     const value = row as DocumentRow;
     Object.assign(document, { title: value.title, bodyText: value.body_text, businessDate: value.document_on, documentType: value.document_type });
+    if (value.document_type === '定位申请单' && value.imaging_modality !== undefined && value.localization_sites !== undefined) {
+      document.imagingModality = value.imaging_modality;
+      document.localizationSites = value.localization_sites;
+    }
   }
   if (type === 'treatment_plan') {
     const value = row as TreatmentPlanRow;

@@ -9,6 +9,7 @@ export const recordProperties = {
   title: { type: 'text', analyzer: 'cjk', fields: { keyword: { type: 'keyword' }, han } },
   bodyText: { type: 'text', analyzer: 'cjk', fields: { han } }, businessDate: { type: 'date', format: 'strict_date' }, updatedAt: { type: 'date' },
   prescribedFractions: { type: 'integer' },
+  imagingModality: { type: 'keyword' }, localizationSites: { type: 'keyword' },
   diagnosisFilters: { type: 'nested', properties: {
     name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
     codingSystem: { type: 'keyword' }, code: { type: 'keyword' },
