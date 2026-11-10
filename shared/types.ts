@@ -11,6 +11,7 @@ export const TYPE_SOURCES: Record<RecordType, Source> = {
 export const DOCUMENT_CATEGORIES = ['定位申请单', '复位申请单', '计划申请单', '后装申请单', '一站式申请单', '检查预约单', '全身放疗申请单', '治疗单', '自定义单据'] as const;
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
 export type SearchType = RecordType | 'all' | DocumentCategory;
+export interface PatientField { label: string; value: string }
 export interface RecordDocument {
   id: string;
   batchId: string;
@@ -43,6 +44,8 @@ export interface RecordDocument {
   prescribedFractions?: number | null;
   imagingModality?: string | null;
   localizationSites?: string[];
+  patientFields?: PatientField[];
+  patientProfile?: string | null;
   diagnosisFilters?: {
     name: string;
     diagnosedOn: string;
@@ -84,6 +87,7 @@ export interface SearchResponse {
   simulationFiltersNeedSync?: boolean;
   simulationBertConfirmed?: boolean;
   patientFilters?: PatientSearchFilters;
+  sexFilter?: { sex: 'female' | 'male' | 'other' | 'unknown'; label: string };
   q: string;
   scope: 'all' | 'patient';
   patientId?: string;

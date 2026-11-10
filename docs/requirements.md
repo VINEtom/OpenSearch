@@ -83,7 +83,7 @@ flowchart LR
 | 查询期间完成新同步 | 原结果保留并提示刷新，同次分页不混用新旧数据 |
 | 搜索、同步或详情读取失败 | 显示对应失败状态，保留输入和返回入口，不伪装为无结果 |
 
-页面操作见 [交互流程](interaction-flows.md)，字段与索引见 [数据模型](data-model.md)，场景准备和验收映射见 [测试用例](test-cases.md)。
+页面操作见 [交互流程](interaction-flows.md)，当前可搜索字段见 [可搜索字段](search-fields.md)，字段与索引见 [数据模型](data-model.md)，场景准备和验收映射见 [测试用例](test-cases.md)。
 
 ### 按定位申请单字段查找
 

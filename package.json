@@ -17,7 +17,7 @@
     "data:capture": "tsx scripts/capture-search.ts",
     "demo:data": "SOURCE_MODE=demo tsx scripts/demo-data.ts",
     "sync": "tsx scripts/sync.ts",
-    "test:unit": "tsx --test tests/data.test.ts tests/search.test.ts tests/real-source.test.ts tests/simulation.test.ts",
+    "test:unit": "tsx --test tests/data.test.ts tests/search.test.ts tests/real-source.test.ts tests/simulation.test.ts tests/patient-profile.test.ts",
     "test:integration": "tsx --test --test-concurrency=1 tests/integration.test.ts",
     "test": "npm run test:unit",
     "infra:up": "docker compose up -d --wait",

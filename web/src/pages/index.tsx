@@ -47,7 +47,7 @@ function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: 
       {hit.code && <div className="result-extra">诊断编码：{[hit.codeSystem, hit.codeVersion].filter(Boolean).join(' ')}{(hit.codeSystem || hit.codeVersion) && ' · '}<span className="mono">{hit.code}</span></div>}
       {(hit.diagnosisIds?.length || hit.planRequestId) && <div className="result-extra">{hit.planRequestId ? '已关联来源申请单' : '已关联具体诊断'}</div>}
       {hit.semanticPassage && <div className="match-line"><span className="match-label">相关正文</span><p>{hit.semanticPassage}</p></div>}
-      <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">命中{field.label}</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
+      <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">{field.label}：</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
     </div>
     <button className="result-open" onClick={onOpen} aria-label={`查看${kindLabel}详情：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>
   </article>;
@@ -298,7 +298,7 @@ export default function SearchPage() {
 
         {error && !notSynced && <div className="notice error-notice" role="alert"><Icon name="info" /><div><strong>{batchUnavailable ? '原查询批次已不可用，请重新查询' : '查询失败'}</strong><p>{error.message}{result ? ` 下方保留上次成功结果（${displayTime(receivedAt)}）。` : ''}</p></div><button className="secondary-button" onClick={() => batchUnavailable ? refreshResults() : void runSearch(attempted || formParams())}>{batchUnavailable ? '重新查询' : '重试'}</button></div>}
 
-        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong>{!result.simulationFiltersNeedSync && <span>共 <b>{result.total}</b> {result.patientFilters ? '位患者' : '条记录'}</span>}<span className="applied-conditions">{resultScope}<i />{result.source === 'all' ? '全部来源' : result.source.toUpperCase()}<i />{categoryLabel(result.type)}</span></div></div>}
+        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong>{!result.simulationFiltersNeedSync && <span>共 <b>{result.total}</b> {result.patientFilters || result.sexFilter ? '位患者' : '条记录'}</span>}<span className="applied-conditions">{resultScope}<i />{result.source === 'all' ? '全部来源' : result.source.toUpperCase()}<i />{categoryLabel(result.type)}</span></div></div>}
 
         {result?.simulationFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
@@ -308,6 +308,7 @@ export default function SearchPage() {
           {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}
         </div>}
         {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少定位申请单的字段，请重新同步后再查。</p><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button></div>}
+        {result?.sexFilter && <div className="patient-filters" role="group" aria-label="识别出的筛选条件"><strong>识别出的筛选条件</strong><span>性别 · {result.sexFilter.label}</span></div>}
         {result?.patientFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
           <span>确诊诊断 · {result.patientFilters.diagnosis}</span>

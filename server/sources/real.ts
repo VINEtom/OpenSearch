@@ -2,7 +2,9 @@ import pg from 'pg';
 import { config } from '../config.js';
 import type { Snapshot } from '../data.js';
 import { AppError } from '../errors.js';
-import { assembleReal, type RealDocument, type RealInput } from './assemble.js';
+import { assembleReal, type RealDocument, type RealInput, type RealPatient } from './assemble.js';
+import { patientProfileFields } from './patient-profile.js';
+import { plain } from './text.js';
 
 const prototypeNames = new Set(['pms_demo', 'emr_demo', 'rvs_demo']);
 const pools = new Map<string, pg.Pool>();
@@ -54,11 +56,53 @@ export async function readRealSnapshot(): Promise<Snapshot> {
   const pms = config.real.databases.pms;
   const emr = config.real.databases.emr;
   const [patients, clinical] = await Promise.all([
-    readOnly(pms, async client => (await client.query(`
-      SELECT id::text, patient_id AS "radiotherapyNo", patient_name_for_search AS name, sex,
-        birthdate AS "birthDate", to_char(creation_time, 'YYYY-MM-DD"T"HH24:MI:SS') AS "createdAt",
-        to_char(COALESCE(last_modification_time, creation_time), 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
-      FROM pms_patient WHERE NOT is_deleted ORDER BY id`)).rows),
+    readOnly(pms, async client => {
+      const rows = (await client.query(`
+        SELECT id::text, patient_id AS "radiotherapyNo", patient_name_for_search AS name, sex,
+          birthdate AS "birthDate", to_char(creation_time, 'YYYY-MM-DD"T"HH24:MI:SS') AS "createdAt",
+          to_char(COALESCE(last_modification_time, creation_time), 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt",
+          chinese_phonetic_for_search, phonetic_first_letter, admission_id, medical_treatment_number,
+          patient_national, patient_country, id_type, identity_number, medical_insurance, height, patient_type,
+          radiation_type, tags, research_in_group, attending_doctor_id::text, in_charge_doctor_id::text,
+          in_charge_doctor_name, resident_doctor_id::text, radiation_therapist_id::text, obsterical_history,
+          drinking_history, smoking_history, children_number, signature_type, outpatient_number, registration_number,
+          ssn_number, id_one, id_two, id_three, id_four, hospitalized_count, doctor_group, patient_source,
+          hospitalized_department, hospital_start_date, hospital_end_date, hospitalization_ward, sickbed_number,
+          admission_number, referral_hospital, hospital_department, home_phone, telephone_number, mobile_phone_two,
+          office_phone, e_mail, fax, other_number, domicile_zip_code, domicile_province, domicile_details,
+          live_address_zip_code, live_address_province, live_address_details, live_address_tag, professional,
+          other_description, to_char(register_date_time, 'YYYY-MM-DD"T"HH24:MI:SS') AS register_date_time, registrar,
+          first_visit_doctor
+        FROM pms_patient WHERE NOT is_deleted ORDER BY id`)).rows as Record<string, unknown>[];
+      const doctors = await client.query('SELECT doctor_id::text AS id, doctor_name AS name FROM pms_doctor_information');
+      const contacts = await client.query('SELECT patient_index::text AS patient_id, relation, name, phone_one, phone_two FROM pms_patient_contact_info ORDER BY patient_index, position');
+      const extras = await client.query('SELECT id::text, medical_insurance_number, predict_admission_time, admission_remark, employing_organization, company_address, recommended_doctor FROM pms_patient_ext');
+      const tags = await client.query('SELECT id::text, name FROM pms_patient_tag WHERE NOT is_deleted');
+      const weights = await client.query('SELECT DISTINCT ON (patient_index) patient_index::text AS id, weight FROM pms_weight_on_date ORDER BY patient_index, date DESC');
+      const temperatures = await client.query('SELECT DISTINCT ON (patient_index) patient_index::text AS id, temperature FROM pms_temperature_on_date ORDER BY patient_index, date DESC');
+      const named = (rows: { id: unknown; name: unknown }[]) => new Map(rows.flatMap(row => {
+        const name = plain(row.name);
+        return name ? [[String(row.id), name] as const] : [];
+      }));
+      const doctorNames = named(doctors.rows);
+      const tagNames = named(tags.rows);
+      const extById = new Map(extras.rows.map(row => [String(row.id), row as Record<string, unknown>]));
+      const weightById = new Map(weights.rows.map(row => [String(row.id), row as Record<string, unknown>]));
+      const temperatureById = new Map(temperatures.rows.map(row => [String(row.id), row as Record<string, unknown>]));
+      const contactsByPatient = new Map<string, Record<string, unknown>[]>();
+      for (const contact of contacts.rows) {
+        const list = contactsByPatient.get(String(contact.patient_id)) ?? [];
+        list.push(contact as Record<string, unknown>);
+        contactsByPatient.set(String(contact.patient_id), list);
+      }
+      return rows.map(row => ({
+        ...row,
+        fields: patientProfileFields({
+          row, ext: extById.get(String(row.id)), contacts: contactsByPatient.get(String(row.id)),
+          doctors: doctorNames, tags: tagNames, weight: weightById.get(String(row.id)), temperature: temperatureById.get(String(row.id)),
+        }),
+      })) as RealPatient[];
+    }),
     readOnly(emr, async client => {
       const diagnoses = (await client.query(`
         SELECT d.id::text, d.patient_index::text AS "patientId", d.name, d.icd_code AS code, icd.version AS "codeVersion",

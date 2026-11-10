@@ -1,8 +1,9 @@
 import pg from 'pg';
 import { config } from './config.js';
 import { fillJump } from './sources/jump.js';
+import { patientProfileText } from './sources/patient-profile.js';
 import { AppError } from './errors.js';
-import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type RecordDocument, type RecordType, type Relation, type Source, type SourceDefect } from '../shared/types.js';
+import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type DetailField, type DetailResponse, type PatientField, type RecordDocument, type RecordType, type Relation, type Source, type SourceDefect } from '../shared/types.js';
 
 export interface BaseRow {
   id: string;
@@ -16,6 +17,7 @@ export interface PatientRow extends BaseRow {
   name: string;
   sex: 'female' | 'male' | 'other' | 'unknown';
   birth_date: string | null;
+  fields?: PatientField[];
 }
 export interface ClinicalRow extends BaseRow { patient_id: string; voided_at: string | null }
 export interface DiagnosisRow extends ClinicalRow {
@@ -276,7 +278,17 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
     diagnosisIds: null, planRequestId: null, sourceDocumentId: null, confirmationStatus: null,
     planStatus: null, documentType: null, codeSystem: null, codeVersion: null, code: null, missingFields: [],
   };
-  if (type === 'patient') document.title = patient.name;
+  if (type === 'patient') {
+    document.title = patient.name;
+    const sexLabel = { male: '男', female: '女', other: '其他', unknown: '未知' }[patient.sex];
+    const fields = [...(patient.fields ?? [])];
+    if (sexLabel && !fields.some(field => field.label === '性别')) fields.unshift({ label: '性别', value: sexLabel });
+    if (fields.length) {
+      document.patientFields = fields;
+      const profile = patientProfileText(fields);
+      if (profile) document.patientProfile = profile;
+    }
+  }
   if (type === 'diagnosis') {
     const value = row as DiagnosisRow;
     Object.assign(document, { title: value.diagnosis_name, bodyText: value.summary, businessDate: value.diagnosed_on,
@@ -330,6 +342,9 @@ function detailFields(record: RecordDocument): DetailField[] {
     { name: 'sex', label: '性别', value: record.sex },
     { name: 'birthDate', label: '出生日期', value: record.birthDate, kind: 'date' },
   ];
+  if (record.recordType === 'patient') {
+    for (const field of record.patientFields ?? []) fields.push({ name: 'patientFields', label: field.label, value: field.value });
+  }
   if (record.recordType !== 'patient') fields.push({ name: 'businessDate', label: '业务日期', value: record.businessDate, kind: 'date' });
   if (record.recordType === 'diagnosis') fields.push(
     { name: 'confirmationStatus', label: '确认状态', value: record.confirmationStatus },

@@ -1,8 +1,8 @@
 import { parseSimulationClue, parseSimulationQuery } from '../server/simulation-query.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePatientQuery } from '../server/patient-query.js';
-import { assertCompleteResponse, buildSearchQuery, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
+import { parsePatientQuery, parseSexQuery } from '../server/patient-query.js';
+import { assertCompleteResponse, buildSearchQuery, matchedPatientFields, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
 
 test('rejects unsupported, duplicated, mismatched and malformed query inputs', () => {
   for (const input of [
@@ -28,6 +28,16 @@ test('highlight conversion preserves unsafe-looking text as literal text and com
   assert.deepEqual(result.ranges, [[17, 19]]);
   assert.equal(result.text.slice(...result.ranges[0]), '屏气');
 });
+test('a text match in patient details is labeled with the specific field', () => {
+  const matches = matchedPatientFields('test', [
+    { label: '拼音', value: 'TEST' },
+    { label: '备注', value: '其他说明' },
+    { label: '联系人', value: '张三 test 配偶' },
+  ]);
+  assert.deepEqual(matches.map(match => match.label), ['拼音', '联系人']);
+  assert.equal(matches[0].text, 'TEST');
+  assert.deepEqual(matches[0].ranges, [[0, 4]]);
+});
 test('unclosed marker remains literal rather than dropping source text', () => {
   assert.deepEqual(parseMarkedHighlight('前文[未闭合', '[', ']'), { text: '前文[未闭合', ranges: [] });
 });
@@ -39,6 +49,13 @@ test('partial, timed-out and inexact search results never become successful zero
   assert.throws(() => assertCompleteResponse({ ...good, hits: { total: { value: 10000, relation: 'gte' }, hits: [] } }));
 });
 
+test('recognizes a sex phrase in Chinese or English', () => {
+  assert.deepEqual(parseSexQuery('性别为男'), { sex: 'male', label: '男' });
+  assert.deepEqual(parseSexQuery('性别为male'), { sex: 'male', label: '男' });
+  assert.deepEqual(parseSexQuery('性别是女'), { sex: 'female', label: '女' });
+  assert.equal(parseSexQuery('男'), undefined);
+  assert.equal(parseSexQuery('性别为男孩'), undefined);
+});
 test('parses the complete patient query in the Shanghai calendar and clamps month end', () => {
   const now = new Date('2026-05-30T16:30:00Z');
   const q = '最近三个月确诊鼻咽癌、处方不少于 20 次';
