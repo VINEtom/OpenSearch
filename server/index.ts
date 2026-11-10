@@ -2,6 +2,7 @@ import express from 'express';
 import { config } from './config.js';
 import { AppError } from './errors.js';
 import { getIndexStatus } from './index-state.js';
+import { syncRecords } from './sync.js';
 import { searchRecords, validateSearchParams } from './search.js';
 import { closePools, loadDetail } from './data.js';
 import { RECORD_TYPES, SOURCES, TYPE_SOURCES, type RecordType, type Source } from '../shared/types.js';
@@ -11,6 +12,7 @@ app.disable('x-powered-by');
 app.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
 app.get('/api/prototype/health', (_req, res) => { res.json({ ok: true, app: 'ois-search-prototype' }); });
 app.get('/api/prototype/index-status', async (_req, res) => { res.json(await getIndexStatus()); });
+app.post('/api/prototype/sync', async (_req, res) => { res.json(await syncRecords()); });
 app.get('/api/prototype/search', async (req, res) => {
   res.json(await searchRecords(validateSearchParams(req.query as Record<string, unknown>)));
 });
