@@ -78,7 +78,16 @@ BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值，第一�
 
 ## WSL2 x64 离线安装 Python 依赖
 
-在 WSL 终端运行 `uname -m` 和 `python3.13 --version`。离线包适用于输出 `x86_64`、使用 CPython 3.13 的 Linux 发行版，要求 glibc 2.28 或更新版本。Python 解释器和 `venv` 模块需事先安装。
+在 WSL 终端运行 `uname -m` 和 `python3.13 --version`。离线包适用于输出 `x86_64`、使用 CPython 3.13 的 Linux 发行版，要求 glibc 2.28 或更新版本。如果 WSL 里还没有 Python 3.13，可以从同一个 Release 下载 Astral 的便携 CPython 压缩包 `cpython-3.13.18+20261026-x86_64-unknown-linux-gnu-install_only.tar.gz` 和 `SHA256SUMS-cpython-wsl2.txt`。在下载目录执行 `sha256sum -c SHA256SUMS-cpython-wsl2.txt`，然后在项目根目录解压并把它加到当前终端的 PATH：
+
+```sh
+mkdir -p .runtime/python313
+tar -xzf /path/to/downloads/cpython-3.13.18+20261026-x86_64-unknown-linux-gnu-install_only.tar.gz -C .runtime/python313
+export PATH="$PWD/.runtime/python313/python/bin:$PATH"
+python3.13 --version
+```
+
+该解释器自带 `venv` 和创建虚拟环境所需的 pip。创建虚拟环境后保留解压目录，因为虚拟环境会引用其中的解释器。原包来自 [Astral 发布页](https://github.com/astral-sh/python-build-standalone/releases/tag/20261026)。
 
 从[模型 Release](https://github.com/VINEtom/OpenSearch/releases/tag/search-models-v1)下载 `ois-python-wheels-linux-x86_64-cp313.tar.gz` 和 `SHA256SUMS-linux-x86_64-cp313.txt`，在下载目录校验：
 
