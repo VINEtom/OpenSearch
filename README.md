@@ -158,3 +158,17 @@ openspec validate --all --strict
 | [交互流程](docs/interaction-flows.md) | 搜索流程、页面线框、详情关联和返回行为 |
 | [测试用例](docs/test-cases.md) | 虚构样例、预期结果及验收映射 |
 | [OpenSpec](openspec/) | 规格、提案、设计依据和实施任务 |
+
+### 本地搜索模型
+
+搜索后端可在同一台机器启动本地 Python 推理进程。BERT 环境需要
+`torch` 和 `transformers`，模型目录应包含微调后的权重和 tokenizer。
+BGE 环境需要 `onnxruntime`、`numpy` 和 `tokenizers`，模型目录应包含
+`model.onnx` 和 `tokenizer.json`。在部署环境按 `.env.example` 指定两套 Python
+和模型目录，模型文件通过单独的部署包提供。设置 `SEARCH_MODELS=off` 可关闭模型。
+
+本机试验目录存在时，后端会自动使用 `.runtime/bert-pilot` 的 BERT 和
+`.runtime/combined-pilot/reranker` 的 BGE，BGE 的 Python 环境来自
+`.runtime/hybrid-pilot/venv`。首次查询加载模型。搜索 OpenSearch 候选后，BGE
+在当前页重排并返回相关正文，不需要为这项功能重建向量索引。
+组合查询示例为「找成像方式为 CT、备注里说要趴着摆位的定位申请单」。

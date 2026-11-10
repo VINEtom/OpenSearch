@@ -58,7 +58,7 @@ export interface MatchField {
   text: string;
   ranges: [number, number][];
 }
-export interface SearchHit extends RecordDocument { matchedFields: MatchField[] }
+export interface SearchHit extends RecordDocument { matchedFields: MatchField[]; semanticPassage?: string }
 export interface SearchParams {
   q: string;
   scope?: 'all' | 'patient';
@@ -82,6 +82,7 @@ export interface SimulationSearchFilters {
 export interface SearchResponse {
   simulationFilters?: SimulationSearchFilters;
   simulationFiltersNeedSync?: boolean;
+  simulationBertConfirmed?: boolean;
   patientFilters?: PatientSearchFilters;
   q: string;
   scope: 'all' | 'patient';

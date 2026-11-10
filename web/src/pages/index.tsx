@@ -46,6 +46,7 @@ function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: 
       <div className="result-meta"><button className="patient-link" onClick={onPatient}><Icon name="patient" size={14} />{hit.patientName}</button><span>放疗号 <b className="mono">{hit.radiotherapyNo}</b></span>{hit.recordType === 'patient' && <><span>{SEX_LABELS[hit.sex] || hit.sex}</span><span>出生日期 {hit.birthDate || '未知'}</span></>}{hit.recordNo && <span>{hit.recordType === 'plan_request' ? '申请单号' : '计划编号'} <b className="mono">{hit.recordNo}</b></span>}{hit.confirmationStatus && <span className={`clinical-status ${hit.confirmationStatus}`}>{CONFIRM_LABELS[hit.confirmationStatus] || hit.confirmationStatus}</span>}{hit.planStatus && <span>计划状态：{hit.planStatus}</span>}{hit.recordType !== 'patient' && <span>{hit.businessDate || '业务日期未提供'}</span>}</div>
       {hit.code && <div className="result-extra">诊断编码：{[hit.codeSystem, hit.codeVersion].filter(Boolean).join(' ')}{(hit.codeSystem || hit.codeVersion) && ' · '}<span className="mono">{hit.code}</span></div>}
       {(hit.diagnosisIds?.length || hit.planRequestId) && <div className="result-extra">{hit.planRequestId ? '已关联来源申请单' : '已关联具体诊断'}</div>}
+      {hit.semanticPassage && <div className="match-line"><span className="match-label">相关正文</span><p>{hit.semanticPassage}</p></div>}
       <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">命中{field.label}</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
     </div>
     <button className="result-open" onClick={onOpen} aria-label={`查看${kindLabel}详情：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>
@@ -263,6 +264,7 @@ export default function SearchPage() {
         {result?.simulationFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
           <span>单据类型 · 定位申请单</span>
+          {result.simulationBertConfirmed && <span>BERT 已核对</span>}
           {result.simulationFilters.imagingModality && <span>成像方式 · {result.simulationFilters.imagingModality}</span>}
           {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}
         </div>}

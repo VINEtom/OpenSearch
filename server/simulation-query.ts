@@ -20,3 +20,11 @@ export function parseSimulationQuery(query: string): SimulationSearchFilters | u
   }
   return filters.imagingModality || filters.localizationSite ? filters : undefined;
 }
+
+export function parseSimulationClue(query: string): { filters: SimulationSearchFilters; fieldQuery: string; clue: string } | undefined {
+  const match = /^(.*?)\s*[,、;]\s*备注(?:里说要|里提到|提到|里写着)\s*(.+?)(?:的)?定位申请单[。]?$/u.exec(query.normalize('NFKC').trim());
+  if (!match) return undefined;
+  const filters = parseSimulationQuery(match[1]);
+  const clue = match[2].trim();
+  return filters && clue ? { filters, fieldQuery: match[1], clue } : undefined;
+}

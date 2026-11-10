@@ -1,4 +1,4 @@
-import { parseSimulationQuery } from '../server/simulation-query.js';
+import { parseSimulationClue, parseSimulationQuery } from '../server/simulation-query.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parsePatientQuery } from '../server/patient-query.js';
@@ -67,4 +67,19 @@ test('parses two exact simulation fields without turning ordinary text into a fi
     { term: { recordType: 'document' } }, { term: { 'documentType.keyword': '定位申请单' } },
     { term: { imagingModality: 'CT' } }, { term: { localizationSites: '头部' } },
   ]);
+});
+
+test('keeps the remark clue separate from explicit simulation fields', () => {
+  const q = '找成像方式为 CT、定位部位是头部，备注里说要趴着摆位的定位申请单';
+  const mixed = parseSimulationClue(q);
+  assert.deepEqual(mixed, {
+    filters: { imagingModality: 'CT', localizationSite: '头部' },
+    fieldQuery: '找成像方式为 CT、定位部位是头部',
+    clue: '趴着摆位',
+  });
+  assert.equal(parseSimulationClue('备注里提到 CT、备注里说要趴着摆位的定位申请单'), undefined);
+  assert.equal(parseSimulationClue('找成像方式不是 CT、备注里说要趴着摆位的定位申请单'), undefined);
+  const { query } = buildSearchQuery(validateSearchParams({ q }), 'OPEN', 'CLOSE', undefined, mixed?.filters, mixed?.clue);
+  assert.deepEqual(query.bool.should, [{ match: { bodyText: '趴着摆位' } }]);
+  assert.ok(query.bool.filter.some(item => JSON.stringify(item) === '{"term":{"imagingModality":"CT"}}'));
 });
