@@ -1,6 +1,6 @@
 # 在另一台电脑上启动 OIS 搜索
 
-以下命令适用于 macOS、Linux 或 Windows 的 WSL2。先用虚构数据启动网页，再按需要配置 PMS、EMR 和本地模型。
+以下命令使用 POSIX shell。在 Windows 上可通过 WSL2 执行。先用虚构数据启动网页，再按需要配置 PMS、EMR 和本地模型。
 
 ## 1. 下载代码并启动基础服务
 
@@ -9,10 +9,16 @@
 ```sh
 git clone https://github.com/VINEtom/OpenSearch.git
 cd OpenSearch
+node --version
+docker info
 npm ci
 [ -f .env ] || cp .env.example .env
 npm run infra:up
 ```
+
+确认 `node --version` 输出 `v22.22.3`，`docker info` 能连接到 Server。使用 Colima 时，应先启动对应 profile，并通过 `docker context use <context>` 选中它。
+
+默认端口 54329、9207、4107、8107 需可用。若要和另一套实例并行，调整 Compose 的宿主机端口、`.env` 中的数据库、OpenSearch 和 API 端口，并同步修改 `web/.umirc.ts` 的代理目标和 `package.json` 的网页端口。
 
 Compose 会启动本机 PostgreSQL（54329）和 OpenSearch（9207）。已有项目时，在自己的开发分支安排同步，并保留原有 `.env`。
 
@@ -25,7 +31,7 @@ Compose 会启动本机 PostgreSQL（54329）和 OpenSearch（9207）。已有�
 
 ## 3. 启用 BERT 和 BGE
 
-在运行 Node 搜索后端的同一台机器或容器准备 Python。本机验证使用 Python 3.13.12。可在 [GitHub Release](https://github.com/VINEtom/OpenSearch/releases/tag/search-models-v1) 下载两套模型及校验文件。在下载目录执行下列命令，校验通过后解压到项目内的 `.runtime/models`：
+在运行 Node 搜索后端的同一台机器或容器准备 Python。本机验证使用 Python 3.13.12。可在 [GitHub Release](https://github.com/VINEtom/OpenSearch/releases/tag/search-models-v1) 下载两套模型及校验文件。把两个压缩包和 `SHA256SUMS.txt` 放在同一目录。下载中断或校验失败时，从 Release 重新下载失败的文件。若 GitHub CLI 下载出现 EOF，可在 Release 页面用浏览器重下该文件，再运行校验。已有 GitHub CLI 时，也可用 `gh release download search-models-v1 -R VINEtom/OpenSearch --pattern <文件名> --dir <下载目录> --clobber` 只重试单个文件。在下载目录校验通过后，再解压到项目内的 `.runtime/models`：
 
 ```sh
 shasum -a 256 -c SHA256SUMS.txt
@@ -34,6 +40,7 @@ shasum -a 256 -c SHA256SUMS.txt
 以下命令从项目根目录运行，将 `/path/to/downloads` 换成实际下载目录：
 
 ```sh
+python3.13 --version
 mkdir -p .runtime/models
 tar -xzf /path/to/downloads/ois-bert-checkpoint.tar.gz -C .runtime/models
 tar -xzf /path/to/downloads/ois-bge-reranker.tar.gz -C .runtime/models
@@ -65,4 +72,6 @@ printf '%s\n' '{"query":"趴着摆位","passages":["患者俯卧，面朝下","�
   .runtime/bge-venv/bin/python scripts/search-model.py reranker .runtime/models/bge-reranker
 ```
 
-BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值。网页端使用新版 EMR 索引，搜索「找成像方式为 CT、备注里说要趴着摆位的定位申请单」，检查 CT 筛选、BERT 核对标记和「相关正文」。BGE 重排当前页的候选单据。普通虚构种子可用于验证基础搜索，当前种子缺少这一组合查询所需的独立定位字段。看到「需要重新同步搜索数据」时，检查当前索引是否由新版代码从 EMR 同步生成。完整验收见 [集成验收文档](search-integration-next-steps.md)。
+BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值，第一项对应俯卧片段，分数应更高。网页端使用新版 EMR 索引，搜索「找成像方式为 CT、备注里说要趴着摆位的定位申请单」，检查 CT 筛选、BERT 核对标记和「相关正文」。BGE 重排当前页的候选单据。普通虚构种子可用放疗号 `000123` 验证基础搜索，应找到「林示例」。当前种子缺少这一组合查询所需的独立定位字段。看到「需要重新同步搜索数据」时，检查当前索引是否由新版代码从 EMR 同步生成。完整验收见 [集成验收文档](search-integration-next-steps.md)。
+
+已在 macOS ARM64 的全新克隆、独立 Compose 数据卷和新建 Python 虚拟环境验证。普通种子通过网页基础搜索。另用带结构化字段的虚构定位单验证 BERT 核对、BGE 重排和相关正文展示。Linux、WSL2 和真实 EMR 连接未在这次验证中测试。
