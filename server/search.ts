@@ -7,6 +7,7 @@ import { birthDateRange, parsePatientQuery, parseSexQuery, splitAgeQuery } from 
 import { confirmWithBert, predictPatientConditions, rerankHits } from './search-models.js';
 import { parseSimulationClue, parseSimulationQuery } from './simulation-query.js';
 import { patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
+import { readableText } from './sources/text.js';
 import { osRequest } from './opensearch.js';
 
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -145,7 +146,8 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       filter: filters,
       should: [
         ...['radiotherapyNo', 'recordNo', 'code'].map(field => ({ term: { [field]: { value: params.q, boost: 10 } } })),
-        { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'patientFields', size: 5, _source: ['label', 'value'] } } },
+        { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'patientFields', size: 5 } } },
+        { nested: { path: 'recordFields', score_mode: 'max', query: { term: { 'recordFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'recordFields', size: 5 } } },
         { multi_match: { query: params.q, fields: queryFields, type: 'best_fields', operator: 'and' } },
       ],
       minimum_should_match: 1,
@@ -184,12 +186,47 @@ export function parseMarkedHighlight(value: string, openMarker: string, closeMar
 
 const titleLabels: Record<RecordType, string> = { patient: '姓名', diagnosis: '诊断名称', plan_request: '申请单标题', treatment_plan: '计划名称', document: '单据标题' };
 const bodyLabels: Record<RecordType, string> = { patient: '资料', diagnosis: '诊断说明', plan_request: '申请内容', treatment_plan: '计划备注', document: '正文' };
+const snippetLimit = 120;
+const snippetBefore = 28;
+
+/** Keep a short window around the first match when the source text is a long passage. */
+export function clipMatch(text: string, ranges: [number, number][]): { text: string; ranges: [number, number][] } {
+  if (text.length <= snippetLimit) return { text, ranges };
+  let start = Math.max(0, ranges[0][0] - snippetBefore);
+  let end = Math.min(text.length, Math.max(start + snippetLimit, ranges[0][1]));
+  if (start > 0) {
+    const boundary = text.indexOf(' ', start);
+    if (boundary !== -1 && boundary < ranges[0][0]) start = boundary + 1;
+  }
+  if (end < text.length) {
+    const boundary = text.lastIndexOf(' ', end);
+    if (boundary > ranges[0][1]) end = boundary;
+  }
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  const body = text.slice(start, end);
+  const shift = prefix.length - start;
+  const next = ranges
+    .filter(([from, to]) => from < end && to > start)
+    .map(([from, to]) => [Math.max(prefix.length, from + shift), Math.min(prefix.length + body.length, to + shift)] as [number, number])
+    .filter(([from, to]) => to > from);
+  return { text: prefix + body + suffix, ranges: next };
+}
+
+/** Clean a highlighter fragment, then keep the same short window used for stored fields. */
+export function presentMarkedFragment(fragment: string, openMarker: string, closeMarker: string): { text: string; ranges: [number, number][] } | undefined {
+  const parsed = parseMarkedHighlight(readableText(fragment), openMarker, closeMarker);
+  if (!parsed.ranges.length) return undefined;
+  return clipMatch(parsed.text, parsed.ranges);
+}
+
 export function matchedPatientFields(query: string, fields: { label: string; value: string }[] = []): MatchField[] {
   const needle = query.toLocaleLowerCase();
   if (!needle) return [];
   const matches: MatchField[] = [];
   for (const field of fields) {
-    const lower = field.value.toLocaleLowerCase();
+    const text = readableText(field.value);
+    const lower = text.toLocaleLowerCase();
     const ranges: [number, number][] = [];
     let from = 0;
     while (from < lower.length) {
@@ -198,7 +235,7 @@ export function matchedPatientFields(query: string, fields: { label: string; val
       ranges.push([at, at + needle.length]);
       from = at + needle.length;
     }
-    if (ranges.length) matches.push({ field: 'patientFields', label: field.label, text: field.value, ranges });
+    if (ranges.length) matches.push({ field: 'patientFields', label: field.label, ...clipMatch(text, ranges) });
   }
   return matches;
 }
@@ -228,7 +265,7 @@ export function fieldLabel(field: string, type: RecordType): string {
 interface EngineResponse {
   timed_out?: boolean;
   _shards: { failed: number };
-  hits: { total: { value: number; relation: string }; hits: { _source: RecordDocument; highlight?: Record<string, string[]>; inner_hits?: { patientFields?: { hits: { hits: { _source?: { label?: string; value?: string } }[] } } } }[] };
+  hits: { total: { value: number; relation: string }; hits: { _source: RecordDocument; highlight?: Record<string, string[]>; inner_hits?: { patientFields?: { hits: { hits: { _source?: { label?: string; value?: string } }[] } }; recordFields?: { hits: { hits: { _source?: { label?: string; value?: string } }[] } } } }[] };
   aggregations: { types: { buckets: { key: RecordType; doc_count: number }[] }; documentTypes?: { buckets: { key: string; doc_count: number }[] } };
 }
 
@@ -309,7 +346,18 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       for (const inner of hit.inner_hits?.patientFields?.hits.hits ?? []) {
         const label = inner._source?.label;
         const value = inner._source?.value;
-        if (label && value) matchedFields.push({ field: 'patientFields', label, text: value, ranges: [[0, value.length]] });
+        if (!label || !value) continue;
+        for (const match of matchedPatientFields(params.q, [{ label, value }])) {
+          if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push(match);
+        }
+      }
+      for (const inner of hit.inner_hits?.recordFields?.hits.hits ?? []) {
+        const label = inner._source?.label;
+        const value = inner._source?.value;
+        if (!label || !value) continue;
+        for (const match of matchedPatientFields(params.q, [{ label, value }])) {
+          if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push({ ...match, field: 'recordFields' });
+        }
       }
       for (const field of Object.keys(textFields)) {
         const fragment = hit.highlight?.[`${field}.han`]?.[0] ?? hit.highlight?.[field]?.[0];
@@ -320,8 +368,17 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
           }
           continue;
         }
-        const parsed = parseMarkedHighlight(fragment, openMarker, closeMarker);
-        if (parsed.ranges.length) matchedFields.push({ field, label: fieldLabel(field, record.recordType), ...parsed });
+        if (field === 'bodyText' && record.recordFields?.length) {
+          const matches = matchedPatientFields(params.q, record.recordFields);
+          if (matches.length) {
+            for (const match of matches) {
+              if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push(match);
+            }
+            continue;
+          }
+        }
+        const presented = presentMarkedFragment(fragment, openMarker, closeMarker);
+        if (presented) matchedFields.push({ field, label: fieldLabel(field, record.recordType), ...presented });
       }
       if (ageFilter && record.birthDate) {
         const birthdayPending = record.birthDate.slice(5) > ageFilter.asOf.slice(5);

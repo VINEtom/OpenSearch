@@ -5,7 +5,8 @@ import { baseline } from '../fixtures/samples.js';
 import { patientSearchCatalog } from '../shared/patient-search-catalog.js';
 import { projectRecords } from '../server/data.js';
 import { birthDateRange, parseAgeQuery, parsePatientQuery, parseSexQuery, splitAgeQuery } from '../server/patient-query.js';
-import { assertCompleteResponse, buildSearchQuery, matchedPatientConditions, matchedPatientFields, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
+import { htmlToText, readableText } from '../server/sources/text.js';
+import { assertCompleteResponse, buildSearchQuery, matchedPatientConditions, matchedPatientFields, parseMarkedHighlight, presentMarkedFragment, validateSearchParams } from '../server/search.js';
 
 test('rejects unsupported, duplicated, mismatched and malformed query inputs', () => {
   for (const input of [
@@ -40,6 +41,35 @@ test('a text match in patient details is labeled with the specific field', () =>
   assert.deepEqual(matches.map(match => match.label), ['拼音', '联系人']);
   assert.equal(matches[0].text, 'TEST');
   assert.deepEqual(matches[0].ranges, [[0, 4]]);
+});
+test('display text decodes entities and keeps clinical comparisons', () => {
+  assert.equal(readableText('a < b > c &nbsp; d'), 'a < b > c d');
+  const [match] = matchedPatientFields('b', [{ label: '备注', value: 'a < b > c' }]);
+  assert.equal(match.text, 'a < b > c');
+  assert.equal(match.text.slice(...match.ranges[0]), 'b');
+});
+test('custom report html decodes entities before dropping tags', () => {
+  assert.equal(htmlToText('&lt;span&gt;治疗目的&lt;/span&gt; &nbsp;'), '治疗目的');
+  assert.equal(htmlToText('<p>治疗目的</p>'), '治疗目的');
+});
+test('a long document hit keeps a short plain-text window around the keyword', () => {
+  const filler = '疗前评估单 '.repeat(40);
+  const stored = `${filler}关联诊断 : [[关联诊断]] &nbsp;治疗目的 : [[治疗目的]] &nbsp;${filler}`;
+  const [match] = matchedPatientFields('治疗目的', [{ label: '正文', value: stored }]);
+  assert.ok(match.text.length < 160);
+  assert.equal(match.text.includes('&nbsp;'), false);
+  assert.equal(match.text.slice(...match.ranges[0]), '治疗目的');
+  assert.ok(match.text.startsWith('…'));
+  assert.ok(match.text.endsWith('…'));
+});
+test('highlight fragments are cleaned and clipped around the keyword', () => {
+  const filler = '疗前评估单 '.repeat(40);
+  const presented = presentMarkedFragment(`${filler}&nbsp;[治疗目的]${filler}`, '[', ']');
+  assert.ok(presented);
+  assert.equal(presented.text.includes('&nbsp;'), false);
+  assert.equal(presented.text.slice(...presented.ranges[0]), '治疗目的');
+  assert.ok(presented.text.startsWith('…'));
+  assert.ok(presented.text.endsWith('…'));
 });
 test('labels only the patient values that satisfy structured search conditions', () => {
   const patient = projectRecords(baseline(), 'test').find(record => record.recordType === 'patient')!;
