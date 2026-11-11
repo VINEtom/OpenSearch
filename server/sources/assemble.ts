@@ -23,6 +23,7 @@ export interface RealDiagnosis {
   codeVersion: string | null;
   definiteDate: string | null;
   parts: unknown[];
+  fields?: PatientField[];
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -35,6 +36,7 @@ export interface RealRequest {
   diagnosisIds: string[];
   courseId: string | null;
   documentType?: string | null;
+  fields?: PatientField[];
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -44,6 +46,7 @@ export interface RealDocument {
   documentType: string;
   title: string | null;
   parts: unknown[];
+  fields?: PatientField[];
   documentOn: string | null;
   courseId: string | null;
   prescriptionId: string | null;
@@ -111,6 +114,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
       diagnosis_name: name, code_system: null, code_version: plain(row.codeVersion), code: plain(row.code),
       confirmation_status: diagnosedOn ? 'confirmed' : 'unknown', diagnosed_on: diagnosedOn,
       source_document_id: null, summary: joinText(row.parts),
+      ...(row.fields?.length ? { fields: row.fields } : {}),
     });
   }
   const requests: PlanRequestRow[] = [];
@@ -134,6 +138,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
       title, body_text: joinText(row.parts), requested_on: null,
       prescribed_fractions: Number.isInteger(fractions) && fractions! > 0 ? fractions : null,
       course_id: row.courseId,
+      ...(row.fields?.length ? { fields: row.fields } : {}),
     });
   }
   const documents: DocumentRow[] = [];
@@ -148,6 +153,7 @@ export function assembleReal(input: RealInput): Snapshot & { defects: SourceDefe
       ...base(row.id, row.createdAt, row.updatedAt), patient_id: row.patientId, voided_at: null,
       document_type: row.documentType, title, body_text: joinText(row.parts), document_on: calendarDate(row.documentOn),
       course_id: row.courseId, prescription_id: row.prescriptionId,
+      ...(row.fields?.length ? { fields: row.fields } : {}),
       ...(row.documentType === '定位申请单' && row.simulationSourceFields ? { simulation_source_fields: row.simulationSourceFields } : {}),
       ...(row.documentType === '定位申请单' && 'imagingModalityKey' in row && 'scanSiteList' in row ? {
         imaging_modality: fieldValues(row.imagingModalityKey)[0]?.toUpperCase() ?? null,

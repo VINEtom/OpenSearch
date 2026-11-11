@@ -29,6 +29,7 @@ export interface DiagnosisRow extends ClinicalRow {
   diagnosed_on: string | null;
   source_document_id: string | null;
   summary: string | null;
+  fields?: PatientField[];
 }
 export interface PlanRequestRow extends ClinicalRow {
   diagnosis_ids: string[];
@@ -39,6 +40,7 @@ export interface PlanRequestRow extends ClinicalRow {
   requested_on: string | null;
   prescribed_fractions: number | null;
   document_type?: string | null;
+  fields?: PatientField[];
 }
 export interface DocumentRow extends ClinicalRow {
   document_type: string;
@@ -50,6 +52,7 @@ export interface DocumentRow extends ClinicalRow {
   imaging_modality?: string | null;
   localization_sites?: string[];
   simulation_source_fields?: SimulationSourceFields;
+  fields?: PatientField[];
 }
 export interface TreatmentPlanRow extends ClinicalRow {
   plan_request_id: string;
@@ -319,6 +322,7 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
       businessDate: value.planned_on, planRequestId: value.plan_request_id, planStatus: value.status,
       diagnosisIds: [...(snapshot.planRequests.find(request => request.id === value.plan_request_id)?.diagnosis_ids ?? [])].sort() });
   }
+  if (type !== 'patient' && 'fields' in row && row.fields?.length) document.recordFields = row.fields;
   const expected: (keyof RecordDocument)[] = ['birthDate'];
   if (type !== 'patient') expected.push('businessDate', 'bodyText');
   if (type === 'diagnosis') expected.push('codeSystem', 'codeVersion', 'code');

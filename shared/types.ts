@@ -56,6 +56,7 @@ export interface RecordDocument {
   simulationSourceFields?: SimulationSourceFields;
   patientFields?: PatientField[];
   patientProfile?: string | null;
+  recordFields?: PatientField[];
   diagnosisFilters?: {
     name: string;
     diagnosedOn: string;

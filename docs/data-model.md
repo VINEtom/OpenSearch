@@ -191,6 +191,7 @@ erDiagram
 | `prescribedFractions` | `integer` | 计划申请单的处方分次数 |
 | `patientFields` | `nested` | 患者文档上患者信息页的业务字段，`label` 为字段名，`value` 精确匹配。主诊、主管、住院医生和物理师存同步时查到的姓名。不含照片，也不含由出生日期推算的年龄 |
 | `patientProfile` | `text` | 患者姓名、地址、备注等文字字段的检索正文。证件号和电话只在 `patientFields` 中精确匹配 |
+| `recordFields` | `nested` | 诊断、申请单和单据上按来源拆分的业务字段，`label` 为字段名，`value` 按完整值精确匹配。枚举存同步时翻译的页面文字，人员、设备和器官存查到的名称，数组取值逐条保存。自由文本字段同时按序合并进 `bodyText` 参与全文检索，枚举名称字段只精确匹配 |
 | `diagnosisFilters` | `nested` | 患者文档上的确诊诊断名称、日期、编码体系、编码及直接关联有效申请单的最高分次数，用于在同一诊断内比较 |
 | `missingFields` | `keyword` 数组 | 本类型应展示但缺失的字段，如 `birthDate`、`businessDate`、`bodyText` |
 
