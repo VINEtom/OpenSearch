@@ -107,3 +107,18 @@ python3.13 -m venv .runtime/bge-venv
 ```
 
 模型权重仍按第 3 节另行下载和解压。安装完成后配置相同的四个模型路径，再运行第 4 节的自检。两个环境均使用 CPU。
+
+## 患者字段 BERT 权重
+
+在另一台电脑拉取最新代码后，从 [患者字段 BERT Release](https://github.com/VINEtom/OpenSearch/releases/tag/patient-bert-v1) 下载 `ois-patient-bert-v1.tar.gz` 和 `SHA256SUMS-patient-bert-v1.txt`。在下载目录执行 `sha256sum -c SHA256SUMS-patient-bert-v1.txt`。macOS 可用 `shasum -a 256 -c SHA256SUMS-patient-bert-v1.txt`。然后从项目根目录解压。
+
+```sh
+mkdir -p .runtime/models
+tar -xzf /path/to/downloads/ois-patient-bert-v1.tar.gz -C .runtime/models
+```
+
+在 `.env` 增加下面一行，并把路径换成项目的绝对路径。患者字段模型复用上文的 `SEARCH_BERT_PYTHON` 和 Python 依赖。重启搜索服务后，用「主诊医生为颜艳」检查页面是否显示实际筛选条件。
+
+```dotenv
+SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/patient-bert-v1
+```

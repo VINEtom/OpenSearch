@@ -1,4 +1,4 @@
-import type { PatientSearchFilters } from '../shared/types.js';
+import type { PatientAgeFilter, PatientSearchFilters } from '../shared/types.js';
 
 const sexCodes = { male: '男', female: '女', other: '其他', unknown: '未知' } as const;
 const sexWords: Record<string, keyof typeof sexCodes> = {
@@ -31,4 +31,49 @@ export function parsePatientQuery(query: string, now = new Date()): PatientSearc
   const monthEnd = new Date(Date.UTC(year, month - months, 0)).getUTCDate();
   const diagnosedFrom = new Date(Date.UTC(year, month - 1 - months, Math.min(day, monthEnd))).toISOString().slice(0, 10);
   return { diagnosis, diagnosedFrom, diagnosedThrough, ...(minimumFractions === undefined ? {} : { minimumFractions }) };
+}
+
+const ageOperators = new Map<string, PatientAgeFilter['operator']>([
+  ['大于', '>'], ['>', '>'], ['至少', '>='], ['不少于', '>='], ['>=', '>='], ['≥', '>='],
+  ['小于', '<'], ['<', '<'], ['至多', '<='], ['不超过', '<='], ['<=', '<='], ['≤', '<='],
+]);
+
+export function parseAgeQuery(query: string, now = new Date()): PatientAgeFilter | undefined {
+  const match = /^年龄\s*(大于|至少|不少于|小于|至多|不超过|>=|<=|>|<|≥|≤)\s*(\d{1,3}|[零一二两三四五六七八九]|[一二两三四五六七八九]?十[一二三四五六七八九]?)\s*(?:周?岁)\s*。?$/u.exec(query.normalize('NFKC').trim());
+  if (!match) return undefined;
+  const [, comparison, ageText] = match;
+  const operator = ageOperators.get(comparison)!;
+  const digits = '零一二三四五六七八九';
+  const chinese = ageText.replaceAll('两', '二');
+  const [tens, ones] = chinese.split('十');
+  const years = /^\d/u.test(ageText) ? Number(ageText)
+    : ones === undefined ? digits.indexOf(tens)
+    : (tens ? digits.indexOf(tens) : 1) * 10 + (ones ? digits.indexOf(ones) : 0);
+  return { operator, years, asOf: shanghaiDate.format(now) };
+}
+
+export function splitAgeQuery(query: string, now = new Date()): { ageFilter: PatientAgeFilter; remaining: string[] } | 'review' | undefined {
+  const parts = query.normalize('NFKC').trim().split(/并且|且/u).map(part => part.trim());
+  const remaining: string[] = [];
+  let ageFilter: PatientAgeFilter | undefined;
+  for (const part of parts) {
+    const age = parseAgeQuery(part, now);
+    if (age) {
+      if (ageFilter) return 'review';
+      ageFilter = age;
+    } else {
+      remaining.push(part);
+    }
+  }
+  if (!ageFilter && !/年龄\s*(?:大于|至少|不少于|小于|至多|不超过|[<>≥≤])/u.test(query.normalize('NFKC'))) return undefined;
+  if (!ageFilter || remaining.some(part => !part || /或|年龄/u.test(part))) return 'review';
+  return { ageFilter, remaining };
+}
+
+export function birthDateRange({ operator, years, asOf }: PatientAgeFilter): { lte: string; gt?: string } {
+  const [year, month, day] = asOf.split('-').map(Number);
+  const cutoffYear = year - years - (operator === '>' || operator === '<=' ? 1 : 0);
+  const monthEnd = new Date(Date.UTC(cutoffYear, month, 0)).getUTCDate();
+  const cutoff = new Date(Date.UTC(cutoffYear, month - 1, Math.min(day, monthEnd))).toISOString().slice(0, 10);
+  return operator === '>' || operator === '>=' ? { lte: cutoff } : { gt: cutoff, lte: asOf };
 }

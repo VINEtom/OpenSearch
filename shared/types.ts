@@ -11,6 +11,7 @@ export const TYPE_SOURCES: Record<RecordType, Source> = {
 export const DOCUMENT_CATEGORIES = ['定位申请单', '复位申请单', '计划申请单', '后装申请单', '一站式申请单', '检查预约单', '全身放疗申请单', '治疗单', '自定义单据'] as const;
 export type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
 export type SearchType = RecordType | 'all' | DocumentCategory;
+export interface PatientCatalogCondition { id: string; value: string }
 export interface PatientField { label: string; value: string }
 export interface SimulationSourceFields {
   treatmentSites: unknown;
@@ -91,10 +92,18 @@ export interface SimulationSearchFilters {
   imagingModality?: string;
   localizationSite?: string;
 }
+export interface PatientAgeFilter {
+  operator: '>' | '>=' | '<' | '<=';
+  years: number;
+  asOf: string;
+}
+
 export interface SearchResponse {
+  ageFilter?: PatientAgeFilter;
   simulationFilters?: SimulationSearchFilters;
   simulationFiltersNeedSync?: boolean;
   simulationBertConfirmed?: boolean;
+  patientCatalogConditions?: PatientCatalogCondition[];
   patientFilters?: PatientSearchFilters;
   sexFilter?: { sex: 'female' | 'male' | 'other' | 'unknown'; label: string };
   q: string;

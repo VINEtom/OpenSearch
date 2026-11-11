@@ -1,8 +1,11 @@
 import { parseSimulationClue, parseSimulationQuery } from '../server/simulation-query.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePatientQuery, parseSexQuery } from '../server/patient-query.js';
-import { assertCompleteResponse, buildSearchQuery, matchedPatientFields, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
+import { baseline } from '../fixtures/samples.js';
+import { patientSearchCatalog } from '../shared/patient-search-catalog.js';
+import { projectRecords } from '../server/data.js';
+import { birthDateRange, parseAgeQuery, parsePatientQuery, parseSexQuery, splitAgeQuery } from '../server/patient-query.js';
+import { assertCompleteResponse, buildSearchQuery, matchedPatientConditions, matchedPatientFields, parseMarkedHighlight, validateSearchParams } from '../server/search.js';
 
 test('rejects unsupported, duplicated, mismatched and malformed query inputs', () => {
   for (const input of [
@@ -38,6 +41,26 @@ test('a text match in patient details is labeled with the specific field', () =>
   assert.equal(matches[0].text, 'TEST');
   assert.deepEqual(matches[0].ranges, [[0, 4]]);
 });
+test('labels only the patient values that satisfy structured search conditions', () => {
+  const patient = projectRecords(baseline(), 'test').find(record => record.recordType === 'patient')!;
+  const conditions = [
+    { label: '主诊医生', value: '虚构医生' },
+    { label: '住院科室', value: '放疗科' },
+    { label: '性别', value: 'female' },
+  ].map(({ label, value }) => ({ id: patientSearchCatalog.find(field => field.label === label)!.id, value }));
+  const record = { ...patient, sex: 'female', patientFields: [
+    { label: '主诊医生', value: '其他医生' },
+    { label: '主诊医生', value: '虚构医生' },
+    { label: '住院科室', value: '放疗科' },
+    { label: '备注', value: '虚构医生' },
+  ] };
+  assert.deepEqual(matchedPatientConditions(record, conditions), [
+    { field: 'patientFields', label: '主诊医生', text: '虚构医生', ranges: [[0, 4]] },
+    { field: 'patientFields', label: '住院科室', text: '放疗科', ranges: [[0, 3]] },
+    { field: 'sex', label: '性别', text: '女', ranges: [[0, 1]] },
+  ]);
+  assert.deepEqual(matchedPatientConditions(record, [{ ...conditions[0], value: '放疗科' }]), []);
+});
 test('unclosed marker remains literal rather than dropping source text', () => {
   assert.deepEqual(parseMarkedHighlight('前文[未闭合', '[', ']'), { text: '前文[未闭合', ranges: [] });
 });
@@ -55,6 +78,40 @@ test('recognizes a sex phrase in Chinese or English', () => {
   assert.deepEqual(parseSexQuery('性别是女'), { sex: 'female', label: '女' });
   assert.equal(parseSexQuery('男'), undefined);
   assert.equal(parseSexQuery('性别为男孩'), undefined);
+});
+test('filters by completed years using the Shanghai query date and strict boundaries', () => {
+  const now = new Date('2026-11-09T16:30:00Z');
+  const q = '年龄大于二十岁';
+  const filter = parseAgeQuery(q, now)!;
+  assert.deepEqual(filter, { operator: '>', years: 20, asOf: '2026-11-10' });
+  assert.deepEqual(parseAgeQuery('年龄 > ２０周岁', now), filter);
+  assert.equal(parseAgeQuery('年龄大于二十岁且在住院', now), undefined);
+  const query = buildSearchQuery(validateSearchParams({ q }), 'OPEN', 'CLOSE', undefined, undefined, undefined, undefined, undefined, filter);
+  assert.deepEqual(query.query.bool.filter, [
+    { term: { recordType: 'patient' } }, { range: { birthDate: { lte: '2005-11-10' } } },
+  ]);
+  assert.deepEqual(birthDateRange(parseAgeQuery('年龄至少20岁', now)!), { lte: '2006-11-10' });
+  assert.deepEqual(birthDateRange(parseAgeQuery('年龄小于20岁', now)!), { gt: '2006-11-10', lte: '2026-11-10' });
+  assert.deepEqual(birthDateRange(parseAgeQuery('年龄至多20岁', now)!), { gt: '2005-11-10', lte: '2026-11-10' });
+  assert.deepEqual(birthDateRange({ operator: '>=', years: 1, asOf: '2024-02-29' }), { lte: '2023-02-28' });
+  assert.deepEqual(birthDateRange({ operator: '>=', years: 1, asOf: '2025-02-28' }), { lte: '2024-02-28' });
+});
+test('keeps age and other conditions in the same patient query regardless of clause order', () => {
+  const now = new Date('2026-11-10T01:00:00Z');
+  for (const q of ['年龄大于二十岁且性别为女', '性别为女并且年龄大于二十岁']) {
+    const parsed = splitAgeQuery(q, now);
+    assert.ok(parsed && parsed !== 'review');
+    assert.deepEqual(parsed.remaining, ['性别为女']);
+    const sex = parseSexQuery(parsed.remaining[0])?.sex;
+    const query = buildSearchQuery(validateSearchParams({ q }), 'OPEN', 'CLOSE', undefined, undefined, undefined, sex, undefined, parsed.ageFilter);
+    assert.deepEqual(query.query.bool.filter, [
+      { term: { recordType: 'patient' } }, { range: { birthDate: { lte: '2005-11-10' } } }, { term: { sex: 'female' } },
+    ]);
+  }
+  for (const q of ['年龄大于二十岁或性别为女', '年龄大于二十岁且性别为女或为男', '年龄大于二十岁且', '年龄大于二十岁且年龄小于三十岁']) {
+    assert.equal(splitAgeQuery(q, now), 'review');
+  }
+  assert.equal(splitAgeQuery('找颜艳主诊的女性患者', now), undefined);
 });
 test('parses the complete patient query in the Shanghai calendar and clamps month end', () => {
   const now = new Date('2026-05-30T16:30:00Z');

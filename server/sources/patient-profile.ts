@@ -1,3 +1,4 @@
+import { idType, patientType, radiationType } from "../../shared/patient-search-enums.js";
 import type { PatientField } from '../../shared/types.js';
 import { calendarDate, plain } from './text.js';
 
@@ -11,9 +12,6 @@ export interface PatientProfileSource {
   temperature?: Record<string, unknown> | null;
 }
 
-const patientType: Record<string, string> = { '0': '治疗', '1': '测试', '2': '科研' };
-const radiationType: Record<string, string> = { '1': '光子', '2': '电子', '3': '质子', '4': '后装' };
-const idType: Record<string, string> = { '1': '身份证', '2': '社保卡', '3': '未知', '4': '驾驶证' };
 
 function text(value: unknown): string | null {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);

@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type SimulationSearchFilters, type Source } from '../shared/types.js';
+import { DOCUMENT_CATEGORIES, RECORD_TYPES, SOURCES, TYPE_SOURCES, type MatchField, type PatientAgeFilter, type PatientCatalogCondition, type PatientSearchFilters, type RecordDocument, type RecordType, type SearchParams, type SearchResponse, type SearchType, type SimulationSearchFilters, type Source } from '../shared/types.js';
 import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { diagnosisValueSet } from './diagnosis-terminology.js';
-import { parsePatientQuery, parseSexQuery } from './patient-query.js';
-import { confirmWithBert, rerankHits } from './search-models.js';
+import { birthDateRange, parsePatientQuery, parseSexQuery, splitAgeQuery } from './patient-query.js';
+import { confirmWithBert, predictPatientConditions, rerankHits } from './search-models.js';
 import { parseSimulationClue, parseSimulationQuery } from './simulation-query.js';
+import { patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
 import { osRequest } from './opensearch.js';
 
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -46,7 +47,7 @@ const textFields = {
   patientProfile: { boost: 2, highlight: { fragment_size: 120, number_of_fragments: 1 } },
 };
 
-export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string) {
+export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string, catalogConditions?: PatientCatalogCondition[], ageFilter?: PatientAgeFilter) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
   const queryFields = fields.map(([field, options]) => `${field}^${options.boost}`);
@@ -84,10 +85,25 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       sort: [...(clue ? [{ _score: 'desc' }] : []), { updatedAt: 'desc' }, { id: 'asc' }],
     };
   }
-  if (sex) {
+  if (ageFilter || catalogConditions?.length || sex) {
+    const conditions = (catalogConditions ?? []).map(condition => {
+      const field = patientSearchFieldById.get(condition.id);
+      if (!field) throw new AppError('INVALID_QUERY', '患者筛选字段无效。');
+      if (field.indexField) return { term: { [field.indexField]: condition.value } };
+      return { nested: { path: 'patientFields', ignore_unmapped: true, query: { bool: { filter: [
+        { term: { 'patientFields.label': field.label } },
+        { term: { 'patientFields.value': condition.value } },
+      ] } } } };
+    });
     return {
       ...resultWindow,
-      query: { bool: { filter: [...filters, { term: { recordType: 'patient' } }, { term: { sex } }] } },
+      query: { bool: { filter: [
+        ...filters,
+        { term: { recordType: 'patient' } },
+        ...(ageFilter ? [{ range: { birthDate: birthDateRange(ageFilter) } }] : []),
+        ...(sex ? [{ term: { sex } }] : []),
+        ...conditions,
+      ] } },
       sort: [{ radiotherapyNo: 'asc' }, { id: 'asc' }],
     };
   }
@@ -187,6 +203,22 @@ export function matchedPatientFields(query: string, fields: { label: string; val
   return matches;
 }
 
+export function matchedPatientConditions(record: RecordDocument, conditions: PatientCatalogCondition[]): MatchField[] {
+  const matches: MatchField[] = [];
+  for (const condition of conditions) {
+    const entry = patientSearchFieldById.get(condition.id);
+    if (!entry) continue;
+    const field = entry.indexField?.split('.')[0] ?? 'patientFields';
+    const value = field === 'patientFields'
+      ? record.patientFields?.find(item => item.label === entry.label && item.value === condition.value)?.value
+      : record[field as keyof RecordDocument];
+    if (value !== condition.value) continue;
+    const text = field === 'sex' ? patientSexLabels[value] ?? value : value;
+    matches.push({ field, label: entry.label, text, ranges: [[0, text.length]] });
+  }
+  return matches;
+}
+
 export function fieldLabel(field: string, type: RecordType): string {
   if (field === 'title') return titleLabels[type];
   if (field === 'bodyText') return bodyLabels[type];
@@ -221,18 +253,47 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         elapsedMs: Math.round(performance.now() - started),
       };
     }
-    const sexFilter = simulationFilters ? undefined : parseSexQuery(params.q);
-    const patientFilters = simulationFilters || sexFilter ? undefined : parsePatientQuery(params.q);
+    const ageQuery = splitAgeQuery(params.q);
+    const needsDetail = () => new AppError('PATIENT_QUERY_NEEDS_DETAIL', '暂未识别出完整的筛选条件。可以改写查询，或直接输入姓名等关键词搜索。');
+    if (ageQuery === 'review') throw needsDetail();
+    const ageFilter = ageQuery?.ageFilter;
+    let sexFilter = simulationFilters || ageQuery ? undefined : parseSexQuery(params.q);
+    const patientFilters = simulationFilters || sexFilter || ageQuery ? undefined : parsePatientQuery(params.q);
     if (patientFilters && !batch.meta.supportsDiagnosisCoding) {
       throw new AppError('PATIENT_FILTER_SYNC_REQUIRED', '请先同步搜索数据，再按确诊日期查询。', 409);
     }
     if (patientFilters && diagnosisValueSet(patientFilters.diagnosis)) {
       patientFilters.codingSystems = ['ICD-10', 'ICD-11'];
     }
+    const canUseCatalog = (params.type === 'all' || params.type === 'patient') && params.source !== 'emr' && params.source !== 'rvs';
+    let catalogConditions: PatientCatalogCondition[] | undefined;
+    if (ageQuery) {
+      const conditions: PatientCatalogCondition[] = [];
+      for (const clause of ageQuery.remaining) {
+        const sex = parseSexQuery(clause);
+        if (sex) {
+          if (sexFilter) throw needsDetail();
+          sexFilter = sex;
+          continue;
+        }
+        const predicted = canUseCatalog ? await predictPatientConditions(clause) : undefined;
+        if (!predicted || predicted === 'review') throw needsDetail();
+        conditions.push(...predicted);
+      }
+      const ids = new Set(conditions.map(condition => condition.id));
+      if (ids.size !== conditions.length || (sexFilter && conditions.some(condition => patientSearchFieldById.get(condition.id)?.indexField === 'sex'))) {
+        throw needsDetail();
+      }
+      if (conditions.length) catalogConditions = conditions;
+    } else if (!simulationFilters && !sexFilter && !patientFilters && canUseCatalog) {
+      const predicted = await predictPatientConditions(params.q);
+      if (predicted === 'review') throw needsDetail();
+      catalogConditions = predicted;
+    }
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;
-    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, mixed?.clue, sexFilter?.sex));
+    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, mixed?.clue, sexFilter?.sex, catalogConditions, ageFilter));
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
@@ -240,7 +301,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     for (const bucket of response.aggregations.documentTypes?.buckets ?? []) categoryCounts[bucket.key] = bucket.doc_count;
     const hits = response.hits.hits.map(hit => {
       const record = hit._source;
-      const matchedFields: MatchField[] = [];
+      const matchedFields = catalogConditions ? matchedPatientConditions(record, catalogConditions) : [];
       for (const field of ['radiotherapyNo', 'recordNo', 'code'] as const) {
         const value = record[field];
         if (value === params.q) matchedFields.push({ field, label: fieldLabel(field, record.recordType), text: value, ranges: [[0, value.length]] });
@@ -262,16 +323,22 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         const parsed = parseMarkedHighlight(fragment, openMarker, closeMarker);
         if (parsed.ranges.length) matchedFields.push({ field, label: fieldLabel(field, record.recordType), ...parsed });
       }
+      if (ageFilter && record.birthDate) {
+        const birthdayPending = record.birthDate.slice(5) > ageFilter.asOf.slice(5);
+        const years = Number(ageFilter.asOf.slice(0, 4)) - Number(record.birthDate.slice(0, 4)) - Number(birthdayPending);
+        const text = `${years} 周岁`;
+        matchedFields.unshift({ field: 'age', label: '年龄', text, ranges: [[0, text.length]] });
+      }
       if (sexFilter) matchedFields.unshift({ field: 'sex', label: '性别', text: sexFilter.label, ranges: [[0, sexFilter.label.length]] });
       return { ...record, matchedFields };
     });
-    const textForRanking = mixed?.clue ?? (!simulationFilters && !patientFilters && params.q.length >= 10
+    const textForRanking = mixed?.clue ?? (!ageFilter && !simulationFilters && !patientFilters && !catalogConditions && params.q.length >= 10
       && !hits.some(hit => hit.matchedFields.some(field => ['radiotherapyNo', 'recordNo', 'code'].includes(field.field))) ? params.q : undefined);
     const [simulationBertConfirmed, rankedHits] = await Promise.all([
       mixed && hits.length ? confirmWithBert(mixed.fieldQuery, mixed.filters) : undefined,
       textForRanking ? rerankHits(textForRanking, hits) : hits,
     ]);
-    return { ...params, ...(simulationBertConfirmed ? { simulationBertConfirmed } : {}), ...(sexFilter ? { sexFilter } : {}), ...(patientFilters ? { patientFilters } : {}), ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: rankedHits, elapsedMs: Math.round(performance.now() - started) };
+    return { ...params, ...(ageFilter ? { ageFilter } : {}), ...(catalogConditions ? { patientCatalogConditions: catalogConditions } : {}), ...(simulationBertConfirmed ? { simulationBertConfirmed } : {}), ...(sexFilter ? { sexFilter } : {}), ...(patientFilters ? { patientFilters } : {}), ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value, typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: rankedHits, elapsedMs: Math.round(performance.now() - started) };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError('SEARCH_UNAVAILABLE', '搜索服务暂时不可用，请检查本地服务后重试。', 503);

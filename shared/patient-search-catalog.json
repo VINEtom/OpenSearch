@@ -1,0 +1,282 @@
+[
+  {
+    "id": "FIELD0",
+    "label": "性别",
+    "indexField": "sex"
+  },
+  {
+    "id": "FIELD1",
+    "label": "姓名",
+    "indexField": "patientName.keyword"
+  },
+  {
+    "id": "FIELD2",
+    "label": "放疗号",
+    "indexField": "radiotherapyNo"
+  },
+  {
+    "id": "FIELD3",
+    "label": "出生日期",
+    "indexField": "birthDate"
+  },
+  {
+    "id": "FIELD4",
+    "label": "拼音"
+  },
+  {
+    "id": "FIELD5",
+    "label": "拼音首字母"
+  },
+  {
+    "id": "FIELD6",
+    "label": "病历号"
+  },
+  {
+    "id": "FIELD7",
+    "label": "诊疗号"
+  },
+  {
+    "id": "FIELD8",
+    "label": "民族"
+  },
+  {
+    "id": "FIELD9",
+    "label": "国籍"
+  },
+  {
+    "id": "FIELD10",
+    "label": "证件类型"
+  },
+  {
+    "id": "FIELD11",
+    "label": "证件号码"
+  },
+  {
+    "id": "FIELD12",
+    "label": "医保"
+  },
+  {
+    "id": "FIELD13",
+    "label": "医保号"
+  },
+  {
+    "id": "FIELD14",
+    "label": "身高"
+  },
+  {
+    "id": "FIELD15",
+    "label": "患者类型"
+  },
+  {
+    "id": "FIELD16",
+    "label": "放疗类型"
+  },
+  {
+    "id": "FIELD17",
+    "label": "特殊情况"
+  },
+  {
+    "id": "FIELD18",
+    "label": "研究入组"
+  },
+  {
+    "id": "FIELD19",
+    "label": "主诊医生"
+  },
+  {
+    "id": "FIELD20",
+    "label": "主管医生"
+  },
+  {
+    "id": "FIELD21",
+    "label": "住院医生"
+  },
+  {
+    "id": "FIELD22",
+    "label": "物理师"
+  },
+  {
+    "id": "FIELD23",
+    "label": "婚育史"
+  },
+  {
+    "id": "FIELD24",
+    "label": "饮酒史"
+  },
+  {
+    "id": "FIELD25",
+    "label": "吸烟史"
+  },
+  {
+    "id": "FIELD26",
+    "label": "子女数"
+  },
+  {
+    "id": "FIELD27",
+    "label": "签名方式"
+  },
+  {
+    "id": "FIELD28",
+    "label": "门诊号"
+  },
+  {
+    "id": "FIELD29",
+    "label": "挂号号"
+  },
+  {
+    "id": "FIELD30",
+    "label": "就诊卡号"
+  },
+  {
+    "id": "FIELD31",
+    "label": "患者卡号1"
+  },
+  {
+    "id": "FIELD32",
+    "label": "患者卡号2"
+  },
+  {
+    "id": "FIELD33",
+    "label": "患者卡号3"
+  },
+  {
+    "id": "FIELD34",
+    "label": "患者卡号4"
+  },
+  {
+    "id": "FIELD35",
+    "label": "住院次数"
+  },
+  {
+    "id": "FIELD36",
+    "label": "医生组"
+  },
+  {
+    "id": "FIELD37",
+    "label": "患者来源"
+  },
+  {
+    "id": "FIELD38",
+    "label": "住院科室"
+  },
+  {
+    "id": "FIELD39",
+    "label": "入院时间"
+  },
+  {
+    "id": "FIELD40",
+    "label": "出院时间"
+  },
+  {
+    "id": "FIELD41",
+    "label": "病区"
+  },
+  {
+    "id": "FIELD42",
+    "label": "床号"
+  },
+  {
+    "id": "FIELD43",
+    "label": "住院号"
+  },
+  {
+    "id": "FIELD44",
+    "label": "转诊医院"
+  },
+  {
+    "id": "FIELD45",
+    "label": "转诊科室"
+  },
+  {
+    "id": "FIELD46",
+    "label": "预计入院"
+  },
+  {
+    "id": "FIELD47",
+    "label": "入院备注"
+  },
+  {
+    "id": "FIELD48",
+    "label": "家庭电话"
+  },
+  {
+    "id": "FIELD49",
+    "label": "联系电话"
+  },
+  {
+    "id": "FIELD50",
+    "label": "其他电话"
+  },
+  {
+    "id": "FIELD51",
+    "label": "办公电话"
+  },
+  {
+    "id": "FIELD52",
+    "label": "邮箱"
+  },
+  {
+    "id": "FIELD53",
+    "label": "传真"
+  },
+  {
+    "id": "FIELD54",
+    "label": "其他号码"
+  },
+  {
+    "id": "FIELD55",
+    "label": "户籍地址"
+  },
+  {
+    "id": "FIELD56",
+    "label": "居住地址"
+  },
+  {
+    "id": "FIELD57",
+    "label": "地址标签"
+  },
+  {
+    "id": "FIELD58",
+    "label": "工作单位"
+  },
+  {
+    "id": "FIELD59",
+    "label": "单位地址"
+  },
+  {
+    "id": "FIELD60",
+    "label": "职业"
+  },
+  {
+    "id": "FIELD61",
+    "label": "备注"
+  },
+  {
+    "id": "FIELD62",
+    "label": "登记时间"
+  },
+  {
+    "id": "FIELD63",
+    "label": "登记人"
+  },
+  {
+    "id": "FIELD64",
+    "label": "首诊医生"
+  },
+  {
+    "id": "FIELD65",
+    "label": "推荐医生"
+  },
+  {
+    "id": "FIELD66",
+    "label": "体重"
+  },
+  {
+    "id": "FIELD67",
+    "label": "体温"
+  },
+  {
+    "id": "FIELD68",
+    "label": "联系人"
+  }
+]

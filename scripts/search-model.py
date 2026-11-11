@@ -6,7 +6,7 @@ import sys
 import unicodedata
 
 
-def load_bert(model_dir):
+def load_bert(model_dir, patient_mode=False):
     import torch
     from transformers import AutoModelForTokenClassification, AutoTokenizer
 
@@ -19,18 +19,25 @@ def load_bert(model_dir):
         batch = tokenizer(text, return_offsets_mapping=True, truncation=True, max_length=512, return_tensors="pt")
         offsets = batch.pop("offset_mapping")[0].tolist()
         with torch.inference_mode():
-            labels = model(**batch).logits[0].argmax(-1).tolist()
+            logits = model(**batch).logits[0]
+            scores, indices = logits.softmax(-1).max(-1)
+            labels = indices.tolist()
+        if patient_mode and model.config.id2label[labels[0]] not in {"KEYWORD", "REVIEW", "FILTER1", "FILTER2", "FILTER3"}:
+            return None
         spans = []
         for (start, end), label_id in zip(offsets, labels):
             label = model.config.id2label[label_id]
-            if start == end or label == "O":
+            if start == end or "-" not in label:
                 continue
             prefix, field = label.split("-", 1)
-            if prefix == "I" and spans and spans[-1][0] == field and spans[-1][2] == start:
+            if prefix == "I" and spans and spans[-1][0] == field and (spans[-1][2] == start or (patient_mode and not text[spans[-1][2]:start].strip())):
                 spans[-1][2] = end
             else:
                 spans.append([field, start, end])
-        return [{"field": field, "text": text[start:end]} for field, start, end in spans]
+        fields = [{"field": field, "text": text[start:end]} for field, start, end in spans]
+        if patient_mode:
+            return {"intent": model.config.id2label[labels[0]], "confidence": scores[0].item(), "fields": fields}
+        return fields
 
     return predict
 
@@ -64,7 +71,7 @@ def load_reranker(model_dir):
 
 if __name__ == "__main__":
     mode, directory = sys.argv[1:]
-    predict = {"bert": load_bert, "reranker": load_reranker}[mode](Path(directory))
+    predict = {"bert": load_bert, "patient-bert": lambda directory: load_bert(directory, patient_mode=True), "reranker": load_reranker}[mode](Path(directory))
     for line in sys.stdin:
         try:
             result = predict(json.loads(line))

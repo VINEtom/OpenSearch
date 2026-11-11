@@ -1,10 +1,12 @@
+import { patientSearchEnumValues } from '../shared/patient-search-enums.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import type { SearchHit, SimulationSearchFilters } from '../shared/types.js';
+import type { PatientCatalogCondition, SearchHit, SimulationSearchFilters } from '../shared/types.js';
 import { normalizeLocalizationSite } from '../shared/simulation-fields.js';
+import { patientSearchFieldById } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
 
 const workerScript = fileURLToPath(new URL('../scripts/search-model.py', import.meta.url));
@@ -14,7 +16,7 @@ class ModelWorker {
   private pending?: (value: unknown) => void;
   private retryAfter = 0;
 
-  constructor(private mode: 'bert' | 'reranker', private python: string, private modelDir: string) {}
+  constructor(private mode: 'bert' | 'patient-bert' | 'reranker', private python: string, private modelDir: string) {}
 
   async predict(payload: object): Promise<unknown> {
     if (process.env.SEARCH_MODELS === 'off' || this.pending || Date.now() < this.retryAfter) return undefined;
@@ -99,4 +101,39 @@ export async function rerankHits(query: string, hits: SearchHit[]): Promise<Sear
   return hits.map((hit, index) => ({ hit, match: best.get(index) }))
     .sort((a, b) => (b.match?.score ?? -Infinity) - (a.match?.score ?? -Infinity))
     .map(({ hit, match }) => match ? { ...hit, semanticPassage: match.text } : hit);
+}
+
+const patientBert = new ModelWorker('patient-bert',
+  process.env.SEARCH_BERT_PYTHON || path.join(config.runtimeDir, 'bert-pilot/venv/bin/python'),
+  process.env.SEARCH_PATIENT_BERT_MODEL_DIR || path.join(config.runtimeDir, 'patient-bert-pilot/catalog-checkpoint'));
+
+export async function predictPatientConditions(query: string): Promise<PatientCatalogCondition[] | 'review' | undefined> {
+  if (!process.env.SEARCH_PATIENT_BERT_MODEL_DIR) return undefined;
+  const prediction = await patientBert.predict({ query }) as {
+    intent?: string; confidence?: number; fields?: { field: string; text: string }[];
+  } | undefined;
+  if (!prediction?.intent || prediction.intent === 'KEYWORD') return undefined;
+  if (prediction.intent === 'REVIEW') return 'review';
+  const expected = { FILTER1: 1, FILTER2: 2, FILTER3: 3 }[prediction.intent];
+  if (!expected || !Number.isFinite(prediction.confidence) || prediction.confidence! < 0.75
+    || !Array.isArray(prediction.fields) || prediction.fields.length !== expected) return 'review';
+
+  const fields: PatientCatalogCondition[] = [];
+  const sex: Record<string, string> = { 男: 'male', 男性: 'male', 女: 'female', 女性: 'female', 其他: 'other', 未知: 'unknown' };
+  for (const item of prediction.fields) {
+    const field = patientSearchFieldById.get(item.field);
+    const raw = item.text.trim();
+    if (!field || !raw || fields.some(entry => entry.id === field.id)) return 'review';
+    const allowedValues = patientSearchEnumValues.get(field.label);
+    if (allowedValues && !allowedValues.has(raw)) return 'review';
+    if (field.indexField === 'birthDate') {
+      const timestamp = Date.parse(raw);
+      if (!/^\d{4}-\d{2}-\d{2}$/u.test(raw) || !Number.isFinite(timestamp)
+        || new Date(timestamp).toISOString().slice(0, 10) !== raw) return 'review';
+    }
+    const value = field.indexField === 'sex' ? sex[raw] : raw;
+    if (!value) return 'review';
+    fields.push({ id: field.id, value });
+  }
+  return fields;
 }
