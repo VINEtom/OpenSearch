@@ -19,6 +19,8 @@ export interface IndexMeta {
   supportsPatientFilters?: boolean;
   supportsDiagnosisCoding?: boolean;
   supportsSimulationFilters?: boolean;
+  supportsSimulationFieldConditions?: boolean;
+  supportsDocumentFieldConditions?: boolean;
   sourceReadAt?: Partial<Record<Source, string>>;
 }
 export interface ActiveBatch { index: string; meta: IndexMeta }

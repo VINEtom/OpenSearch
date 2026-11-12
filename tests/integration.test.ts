@@ -10,8 +10,8 @@ import { config } from '../server/config.js';
 import { closePools, getPool, loadDetail, readSnapshot } from '../server/data.js';
 import { AppError } from '../server/errors.js';
 import { getIndexStatus, readIndexMeta, readManifest, writeManifest } from '../server/index-state.js';
-import { parsePatientQuery } from '../server/patient-query.js';
-import { searchRecords } from '../server/search.js';
+import { parsePatientQuery } from './support/legacy/patient-query.js';
+import { buildSearchQuery, searchRecords, validateSearchParams } from '../server/search.js';
 import { syncRecords } from '../server/sync.js';
 import { osRequest } from '../server/opensearch.js';
 import { TYPE_SOURCES, type IndexStatus, type RecordType, type SearchHit, type SearchParams, type SearchResponse } from '../shared/types.js';
@@ -214,6 +214,18 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
     assert.deepEqual([...new Set(sameName.hits.map((hit) => hit.radiotherapyNo))].sort(), ['000123', '00123']);
   });
 
+  async function structuredDiagnosisIds(q: string, options: Partial<SearchParams> = {}) {
+    const filters = parsePatientQuery(q);
+    assert.ok(filters);
+    const status = await getIndexStatus();
+    assert.ok(status.batchId);
+    const params = validateSearchParams({ q, ...options });
+    const plan = buildSearchQuery(params, 'OPEN', 'CLOSE', filters);
+    const response = await osRequest<{hits: {hits: {_id: string}[]}}>(
+      `/${config.indexAlias}-${status.batchId}/_search`, 'POST', plan);
+    return response.hits.hits.map(hit => hit._id).sort();
+  }
+
   it('matches patients once, using the date and prescription of the same confirmed diagnosis', async () => {
     await withBaseline(async () => {
       const text = '最近三个月确诊鼻咽癌、处方不少于 20 次';
@@ -234,18 +246,16 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       );
       await seed({ reset: true, snapshot });
       await syncRecords();
-      const result = await query(text);
-      assert.deepEqual(result.patientFilters, { ...filters, codingSystems: ['ICD-10', 'ICD-11'] });
-      assertRecords(result, ['P1']);
-      assertRecords(await query('最近3个月确诊鼻咽癌,处方至少21次'), []);
-      assertRecords(await query(text, { scope: 'patient', patientId: idFor('P2') }), []);
+      assert.deepEqual(await structuredDiagnosisIds(text), [idFor('P1')]);
+      assert.deepEqual(await structuredDiagnosisIds('最近3个月确诊鼻咽癌,处方至少21次'), []);
+      assert.deepEqual(await structuredDiagnosisIds(text, { scope: 'patient', patientId: idFor('P2') }), []);
 
       const beforeWindow = new Date(filters.diagnosedFrom);
       beforeWindow.setUTCDate(beforeWindow.getUTCDate() - 1);
       await getPool('emr').query('UPDATE diagnoses SET diagnosed_on = $1 WHERE id = ANY($2::uuid[])',
         [beforeWindow.toISOString().slice(0, 10), [npc.id, repeat.id]]);
       await syncRecords();
-      assertRecords(await query(text), []);
+      assert.deepEqual(await structuredDiagnosisIds(text), []);
       assertRecords(await query('屏气'), [...BREATHING_RECORDS, 'R4']);
     });
   });
@@ -272,12 +282,8 @@ describe('OIS search integration: real PostgreSQL and OpenSearch', { concurrency
       await seed({ reset: true, snapshot });
       await syncRecords();
 
-      const result = await query(text);
-      assertRecords(result, ['P1', 'P2']);
-      assert.deepEqual(result.patientFilters, {
-        diagnosis: '鼻咽癌', diagnosedFrom, diagnosedThrough, codingSystems: ['ICD-10', 'ICD-11'],
-      });
-      assertRecords(await query(text + '、处方不少于 20 次'), ['P1']);
+      assert.deepEqual(await structuredDiagnosisIds(text), [idFor('P1'), idFor('P2')].sort());
+      assert.deepEqual(await structuredDiagnosisIds(text + '、处方不少于 20 次'), [idFor('P1')]);
     });
   });
 

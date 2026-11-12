@@ -4,14 +4,15 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import type { PatientCatalogCondition, SearchHit, SimulationSearchFilters } from '../shared/types.js';
-import { normalizeLocalizationSite } from '../shared/simulation-fields.js';
+import type { PatientCatalogCondition, PatientSearchFilters, SearchHit } from '../shared/types.js';
 import { patientSearchFieldById } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
+import { diagnosisAliases, diagnosisName, diagnosisValueSet, indexedDiagnosisTerms } from './diagnosis-terminology.js';
+import { diagnosisDateRange } from './patient-query.js';
 
 const workerScript = fileURLToPath(new URL('../scripts/search-model.py', import.meta.url));
 
-class ModelWorker {
+export class ModelWorker {
   private child?: ChildProcessWithoutNullStreams;
   private pending?: (value: unknown) => void;
   private retryAfter = 0;
@@ -59,22 +60,9 @@ class ModelWorker {
   }
 }
 
-const bert = new ModelWorker('bert',
-  process.env.SEARCH_BERT_PYTHON || path.join(config.runtimeDir, 'bert-pilot/venv/bin/python'),
-  process.env.SEARCH_BERT_MODEL_DIR || path.join(config.runtimeDir, 'bert-pilot/checkpoint'));
 const reranker = new ModelWorker('reranker',
   process.env.SEARCH_BGE_PYTHON || path.join(config.runtimeDir, 'hybrid-pilot/venv/bin/python'),
   process.env.SEARCH_BGE_MODEL_DIR || path.join(config.runtimeDir, 'combined-pilot/reranker'));
-
-export async function confirmWithBert(query: string, filters: SimulationSearchFilters): Promise<boolean> {
-  const result = await bert.predict({ query });
-  if (!Array.isArray(result)) return false;
-  const values = (field: string) => result.filter(item => item?.field === field && typeof item.text === 'string').map(item => item.text as string);
-  const modalities = values('MOD');
-  const sites = values('SITE');
-  return (!filters.imagingModality || (modalities.length === 1 && modalities[0].toUpperCase() === filters.imagingModality))
-    && (!filters.localizationSite || (sites.length === 1 && normalizeLocalizationSite(sites[0]) === filters.localizationSite));
-}
 
 function passages(body: string): string[] {
   const chunks = [];
@@ -136,4 +124,47 @@ export async function predictPatientConditions(query: string): Promise<PatientCa
     fields.push({ id: field.id, value });
   }
   return fields;
+}
+
+
+const diagnosisModelDir = process.env.SEARCH_DIAGNOSIS_BERT_MODEL_DIR;
+const diagnosisBert = diagnosisModelDir && new ModelWorker('patient-bert',
+  process.env.SEARCH_BERT_PYTHON || path.join(config.runtimeDir, 'bert-pilot/venv/bin/python'),
+  diagnosisModelDir);
+let diagnosisPending: Promise<unknown> = Promise.resolve();
+
+export async function predictDiagnosisFilters(query: string, index: string): Promise<PatientSearchFilters | 'review' | undefined> {
+  const normalizedQuery = query.normalize('NFKC');
+  if (!diagnosisBert || !normalizedQuery.includes('月') || !/\d/u.test(normalizedQuery)) return undefined;
+  const pending = diagnosisPending.then(() => diagnosisBert.predict({ query }));
+  diagnosisPending = pending.catch(() => undefined);
+  const prediction = await pending as {
+    intent?: string; confidence?: number; fields?: { field: string; text: string }[];
+  } | undefined;
+  if (!prediction?.intent || prediction.intent === 'KEYWORD') return undefined;
+  if (!Number.isFinite(prediction.confidence) || prediction.confidence! < 0.75) return 'review';
+  if (prediction.intent !== 'FILTER3' || !prediction.fields) return 'review';
+
+  const monthFields = prediction.fields.filter(item => item.field === 'MONTHS_value');
+  const statusFields = prediction.fields.filter(item => item.field === 'STATUS_value');
+  const diseaseParts = prediction.fields.filter(item => item.field === 'DIAGNOSIS_value')
+    .map(item => item.text.normalize('NFKC'));
+  const monthText = monthFields[0]?.text;
+  const months = Number(monthText);
+  if (monthFields.length !== 1 || statusFields.length !== 1 || statusFields[0].text !== '确诊'
+    || !diseaseParts.length || !Number.isInteger(months) || months < 1 || months > 99) return 'review';
+
+  const terms = await indexedDiagnosisTerms(index);
+  const names = new Set([...diagnosisAliases, ...terms.map(diagnosisName)]);
+  const candidates = [...names].filter(name => name && normalizedQuery.includes(name));
+  const fullNames = candidates.filter(name => !candidates.some(other => other !== name && other.includes(name)));
+  const [diagnosis] = fullNames;
+  if (fullNames.length !== 1 || !diseaseParts.every(part => part && diagnosis.includes(part))) return 'review';
+  const numbers = normalizedQuery.replace(diagnosis, '').match(/\d+/gu);
+  if (numbers?.length !== 1 || numbers[0] !== monthText) return 'review';
+
+  const dates = diagnosisDateRange(months);
+  if (diagnosisValueSet(diagnosis)) return { diagnosis, ...dates, codingSystems: ['ICD-10', 'ICD-11'] };
+  const indexedDiagnosisTitles = [...new Set(terms.filter(term => diagnosisName(term) === diagnosis).map(term => term.title))];
+  return { diagnosis, ...dates, indexedDiagnosisTitles };
 }

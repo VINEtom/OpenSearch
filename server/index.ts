@@ -36,6 +36,8 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   res.status(problem.status).json({ error: { code: problem.code, message: problem.message } });
 });
 
+if (config.webDistDir) app.use(express.static(config.webDistDir));
+
 const server = app.listen(config.port, '127.0.0.1', () => console.log(`OIS prototype API: http://127.0.0.1:${config.port}`));
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => {
   server.close(() => { void closePools().finally(() => process.exit(0)); });

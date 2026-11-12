@@ -8,6 +8,7 @@ import { projectRecords, readSnapshot, validateSnapshot } from './data.js';
 import type { RecordDocument, SourceDefect } from '../shared/types.js';
 import { activeBatch, getIndexStatus, INDEX_OWNER, readManifest, writeManifest, type IndexMeta } from './index-state.js';
 import { withDiagnosisFilters } from './diagnosis-filters.js';
+import { documentNumericLabels } from './document-field-query.js';
 import { recordProperties } from './mapping.js';
 import { osRequest } from './opensearch.js';
 
@@ -65,13 +66,24 @@ export async function publishRecords(records: RecordDocument[], options: SyncOpt
       await osRequest(`/${previous.index}/_mapping`, 'PUT', { _meta: { ...previous.meta, published: true } });
     }
     const batchId = options.batchId ?? `${new Date().toISOString().replace(/\D/g, '')}-${randomUUID().slice(0, 8)}`;
-    const stamped = withDiagnosisFilters(records.map(record => ({ ...record, batchId })));
+
+    const stamped = withDiagnosisFilters(records.map(record => {
+      const numericLabels = documentNumericLabels.get(record.documentType ?? '');
+      const fields = record.recordFields;
+      if (!numericLabels?.size || !fields) return { ...record, batchId };
+      const recordFields = fields.map(field => {
+        const value = Number(field.value);
+        return numericLabels.has(field.label) && field.value.trim() && Number.isFinite(value)
+          ? { ...field, numericValue: value } : field;
+      });
+      return { ...record, batchId, recordFields };
+    }));
     newIndex = `${config.indexAlias}-${batchId}`;
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, stamped.filter(row => row.recordType === type).length])) as Record<RecordType, number>;
     const simulations = stamped.filter(row => row.recordType === 'document' && row.documentType === '定位申请单');
     const supportsSimulationFilters = simulations.length > 0
       && simulations.every(row => row.imagingModality !== undefined && row.localizationSites !== undefined);
-    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, supportsDiagnosisCoding: true, supportsSimulationFilters, sourceReadAt: options.sourceReadAt };
+    let meta: IndexMeta = { owner: INDEX_OWNER, batchId, ready: false, published: false, syncedAt: new Date().toISOString(), total: stamped.length, typeCounts, supportsPatientFilters: true, supportsDiagnosisCoding: true, supportsSimulationFilters, supportsSimulationFieldConditions: simulations.some(row => row.recordFields?.length), supportsDocumentFieldConditions: true, sourceReadAt: options.sourceReadAt };
     await osRequest(`/${newIndex}`, 'PUT', {
       settings: { index: { number_of_shards: 1, number_of_replicas: 0, refresh_interval: '-1' } },
       mappings: { dynamic: 'strict', _meta: meta, properties: recordProperties },

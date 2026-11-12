@@ -24,6 +24,8 @@ export const config = {
   },
   jump,
   opensearchUrl: process.env.OPENSEARCH_URL || 'http://127.0.0.1:9207',
-  indexAlias: 'ois-records',
+  indexAlias: process.env.OPENSEARCH_INDEX_ALIAS || 'ois-records',
+  documentBertDir: process.env.SEARCH_DOCUMENT_BERT_MODEL_DIR,
+  webDistDir: process.env.WEB_DIST_DIR,
   runtimeDir: path.resolve(process.env.RUNTIME_DIR || '.runtime'),
 };

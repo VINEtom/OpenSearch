@@ -1,10 +1,11 @@
-import { parseSimulationClue, parseSimulationQuery } from '../server/simulation-query.js';
+import { simulationSpecs } from '../server/sources/record-fields.js';
+import { parseSimulationClue, parseSimulationFieldQuery, parseSimulationQuery } from '../tests/support/legacy/simulation-query.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { baseline } from '../fixtures/samples.js';
 import { patientSearchCatalog } from '../shared/patient-search-catalog.js';
 import { projectRecords } from '../server/data.js';
-import { birthDateRange, parseAgeQuery, parsePatientQuery, parseSexQuery, splitAgeQuery } from '../server/patient-query.js';
+import { birthDateRange, parseAgeQuery, parsePatientQuery, parseSexQuery, splitAgeQuery } from '../tests/support/legacy/patient-query.js';
 import { htmlToText, readableText } from '../server/sources/text.js';
 import { assertCompleteResponse, buildSearchQuery, matchedPatientConditions, matchedPatientFields, parseMarkedHighlight, presentMarkedFragment, validateSearchParams } from '../server/search.js';
 
@@ -186,4 +187,17 @@ test('keeps the remark clue separate from explicit simulation fields', () => {
   const { query } = buildSearchQuery(validateSearchParams({ q }), 'OPEN', 'CLOSE', undefined, mixed?.filters, mixed?.clue);
   assert.deepEqual(query.bool.should, [{ match: { bodyText: '趴着摆位' } }]);
   assert.ok(query.bool.filter.some(item => JSON.stringify(item) === '{"term":{"imagingModality":"CT"}}'));
+});
+
+test('all configured simulation fields can be queried by name', () => {
+  for (const field of simulationSpecs) {
+    const value = field.number ? '3' : '示例';
+    const operator = field.text ? '包含' : '为';
+    const filters = parseSimulationFieldQuery(`${field.label}${operator}${value}的定位申请单`);
+    assert.ok(filters && filters !== 'invalid', field.label);
+    assert.equal(filters.fields?.[0]?.label, field.label);
+  }
+  assert.equal(parseSimulationFieldQuery('CT层厚小于未知'), 'invalid');
+  assert.equal(parseSimulationFieldQuery('技术为示例且未知条件'), 'invalid');
+  assert.equal(parseSimulationFieldQuery('屏气'), undefined);
 });

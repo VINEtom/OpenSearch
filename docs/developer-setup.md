@@ -54,7 +54,6 @@ python3.13 -m venv .runtime/bge-venv
 
 ```dotenv
 SEARCH_BERT_PYTHON=/abs/path/OpenSearch/.runtime/bert-venv/bin/python
-SEARCH_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/bert-checkpoint
 SEARCH_BGE_PYTHON=/abs/path/OpenSearch/.runtime/bge-venv/bin/python
 SEARCH_BGE_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/bge-reranker
 ```
@@ -72,9 +71,7 @@ printf '%s\n' '{"query":"趴着摆位","passages":["患者俯卧，面朝下","�
   .runtime/bge-venv/bin/python scripts/search-model.py reranker .runtime/models/bge-reranker
 ```
 
-BERT 应返回含 `MOD` 和 `CT` 的 JSON，BGE 应返回两个数值，第一项对应俯卧片段，分数应更高。网页端使用新版 EMR 索引，搜索「找成像方式为 CT、备注里说要趴着摆位的定位申请单」，检查 CT 筛选、BERT 核对标记和「相关正文」。BGE 重排当前页的候选单据。普通虚构种子可用放疗号 `000123` 验证基础搜索，应找到「林示例」。当前种子缺少这一组合查询所需的独立定位字段。看到「需要重新同步搜索数据」时，检查当前索引是否由新版代码从 EMR 同步生成。完整验收见 [集成验收文档](search-integration-next-steps.md)。
-
-已在 macOS ARM64 的全新克隆、独立 Compose 数据卷和新建 Python 虚拟环境验证。普通种子通过网页基础搜索。另用带结构化字段的虚构定位单验证 BERT 核对、BGE 重排和相关正文展示。Linux、WSL2 和真实 EMR 连接未在这次验证中测试。
+旧版定位 BERT 的自检输出包含 `MOD` 和 `CT`，该权重可用于离线对照。网页使用下文的患者和单据模型配置。BGE 自检应返回两个数值，俯卧片段分数更高。网页可先用虚构种子的放疗号 `000123` 验证关键词搜索，再使用带独立单据字段的测试批次验证「找成像方式为 CT 的定位申请单」。页面应展示筛选条件及命中字段。看到「需要重新同步搜索数据」时，检查索引批次是否支持单据字段筛选。
 
 ## WSL2 x64 离线安装 Python 依赖
 
@@ -106,19 +103,46 @@ python3.13 -m venv .runtime/bge-venv
 .runtime/bge-venv/bin/python -m pip install --no-index --find-links .runtime/wheels/bge onnxruntime==1.31.1 numpy==2.5.4 tokenizers==0.23.3
 ```
 
-模型权重仍按第 3 节另行下载和解压。安装完成后配置相同的四个模型路径，再运行第 4 节的自检。两个环境均使用 CPU。
+模型权重仍按第 3 节另行下载和解压。安装完成后配置对应的 Python 和模型路径，再运行第 4 节的自检。两个环境均使用 CPU。
 
-## 患者字段 BERT 权重
+## 当前全局搜索的 BERT 权重
 
-在另一台电脑拉取最新代码后，从 [患者字段 BERT Release](https://github.com/VINEtom/OpenSearch/releases/tag/patient-bert-v1) 下载 `ois-patient-bert-v1.tar.gz` 和 `SHA256SUMS-patient-bert-v1.txt`。在下载目录执行 `sha256sum -c SHA256SUMS-patient-bert-v1.txt`。macOS 可用 `shasum -a 256 -c SHA256SUMS-patient-bert-v1.txt`。然后从项目根目录解压。
+从 [OIS Search BERT v2](https://github.com/VINEtom/OpenSearch/releases/tag/ois-search-bert-v2) 下载患者、单据和诊断三个权重包及校验文件。BGE Reranker 按第 3 节安装。三个 BERT 共用 `SEARCH_BERT_PYTHON`。
+
+在下载目录校验，macOS 可将 `sha256sum -c` 换成 `shasum -a 256 -c`。
+
+```sh
+sha256sum -c SHA256SUMS-ois-search-bert-v2.txt
+```
+
+在项目根目录解压。
 
 ```sh
 mkdir -p .runtime/models
-tar -xzf /path/to/downloads/ois-patient-bert-v1.tar.gz -C .runtime/models
+for model in patient document diagnosis; do
+  tar -xzf "/path/to/downloads/ois-$model-bert-v2.tar.gz" -C .runtime/models
+done
 ```
 
-在 `.env` 增加下面一行，并把路径换成项目的绝对路径。患者字段模型复用上文的 `SEARCH_BERT_PYTHON` 和 Python 依赖。重启搜索服务后，用「主诊医生为颜艳」检查页面是否显示实际筛选条件。
+在 `.env` 配置模型绝对路径。
 
 ```dotenv
-SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/patient-bert-v1
+SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-patient-bert-v2
+SEARCH_DOCUMENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-document-bert-v2
+SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnosis-bert-v2
+```
+
+单据模型包中的 `labels.json` 与权重配套。诊断模型用于本地确诊查询验证。可用「主诊医生为颜艳」「总次数不少于20次的计划申请单」「最近10个月确诊鼻咽癌」检查三个入口。
+
+构建执行 `npm run build`。保留同一份 `web/dist` 和对应的服务端源码，启动时可用 `WEB_DIST_DIR` 指向构建产物。集成环境使用独立的 `OPENSEARCH_INDEX_ALIAS` 和 `RUNTIME_DIR`。
+
+明确单条件模型暂不可用时，接口返回 `503 DOCUMENT_MODEL_UNAVAILABLE`，页面提示稍后重试。多个明确字段或模型结果未通过校验时，返回 `400 INVALID_QUERY`。省略单据类型时，单据模型不执行字段筛选。
+
+患者资料和单据搜索由模型提取明确单条件。配置 `SEARCH_DIAGNOSIS_BERT_MODEL_DIR` 指向补训后的诊断权重目录，可在本地验证按确诊日期和索引中的诊断名称找患者。
+
+回归脚本读取测试数据的预期 ID，并验证筛选条件、命中值和错误状态。传入三个使用同一构建的集成实例地址，分别对应边界数据、脱敏快照和缺失模型目录。最后两个参数为边界样本和脱敏快照的预期 JSON。
+
+```sh
+node --import tsx scripts/verify-document-bert-release.ts \
+  EDGE_URL SNAPSHOT_URL UNAVAILABLE_URL EDGE_FIXTURES SNAPSHOT_EXPECTED
 ```

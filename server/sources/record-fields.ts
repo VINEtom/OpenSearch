@@ -119,7 +119,7 @@ export function treatGoalLabel(name: string): string {
   return therapeuticPurpose[match[1]] ?? name;
 }
 
-const simulationSpecs: FieldSpec[] = [
+export const simulationSpecs: FieldSpec[] = [
   { column: 'immobilize_description', label: '固定说明', text: true },
   { column: 'scan_description', label: '扫描说明', text: true },
   { column: 'immobilization_remarks', label: '固定备注', text: true },

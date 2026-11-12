@@ -1,12 +1,12 @@
 import { patientSearchFieldById, patientSexLabels } from '../../../shared/patient-search-catalog';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { IndexStatus, RecordDocument, SearchHit, SearchParams, SearchResponse, SearchType, Source, SourceDefect } from '../../../shared/types';
+import type { IndexStatus, RecordDocument, SearchHit, SearchParams, SearchResponse, SearchType, SourceDefect } from '../../../shared/types';
 import DetailView, { type DetailFrame, type DetailTarget } from '../components/DetailView';
 import { errorInfo, postApi, readApi, type ErrorInfo } from '../lib/api';
 import { categoryLabel, CONFIRM_LABELS, displayTime, Highlight, Icon, SEARCH_CATEGORIES, SEX_LABELS, TYPE_LABELS } from '../lib/presentation';
 
 interface PatientContext { id: string; name: string; number: string }
-interface SearchForm { q: string; scope: 'all' | 'patient'; source: Source | 'all'; type: SearchType }
+interface SearchForm { q: string; scope: 'all' | 'patient'; type: SearchType }
 interface SavedState {
   version: 1;
   form: SearchForm;
@@ -18,14 +18,15 @@ interface SavedState {
   stack: DetailFrame[];
 }
 const STORAGE_KEY = 'ois-search-prototype-session-v1';
-const DEFAULT_FORM: SearchForm = { q: '', scope: 'all', source: 'all', type: 'all' };
+const DEFAULT_FORM: SearchForm = { q: '', scope: 'all', type: 'all' };
 
 function loadSession(): SavedState | null {
   if (typeof window === 'undefined') return null;
   try {
     const value = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || 'null') as SavedState | null;
     if (value?.version !== 1 || !value.form || !Array.isArray(value.stack)) return null;
-    if (value.form.source === 'rvs') value.form.source = 'all';
+    const { q, scope, type } = value.form;
+    value.form = { q, scope, type };
     if (value.form.type === 'treatment_plan' || value.form.type === 'document') value.form.type = 'all';
     if (value.form.type === 'plan_request') value.form.type = '计划申请单';
     return value;
@@ -33,7 +34,7 @@ function loadSession(): SavedState | null {
 }
 
 function sameConditions(form: SearchForm, result: SearchResponse | null, patient: PatientContext | null) {
-  return !!result && form.q.trim() === result.q && form.scope === result.scope && form.source === result.source && form.type === result.type && (form.scope !== 'patient' || patient?.id === result.patientId);
+  return !!result && form.q.trim() === result.q && form.scope === result.scope && result.source === 'all' && form.type === result.type && (form.scope !== 'patient' || patient?.id === result.patientId);
 }
 
 function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: string; onOpen: () => void; onPatient: () => void }) {
@@ -121,8 +122,7 @@ export default function SearchPage() {
   const frame = stack[stack.length - 1];
   const dirty = !!result && !sameConditions(form, result, patient);
   const newerBatch = !!result && !!status?.batchId && status.batchId !== result.batchId;
-  const visibleCategories = SEARCH_CATEGORIES.filter((item) => form.source === 'all' || item.source === form.source);
-  const countConditionsMatch = !!result && !result.simulationFiltersNeedSync && form.q.trim() === result.q && form.scope === result.scope && form.source === result.source && (form.scope === 'all' || patient?.id === result.patientId);
+  const countConditionsMatch = !!result && !result.simulationFiltersNeedSync && form.q.trim() === result.q && form.scope === result.scope && result.source === 'all' && (form.scope === 'all' || patient?.id === result.patientId);
   const notSynced = status?.state === 'not_synced' || error?.code === 'NOT_SYNCED';
   const lastSyncedAt = status?.syncedAt || result?.syncedAt;
 
@@ -182,7 +182,7 @@ export default function SearchPage() {
   }, []);
 
   const formParams = (): SearchParams => ({ ...form, q: form.q.trim(), patientId: form.scope === 'patient' ? patient?.id : undefined, page: 1 });
-  const appliedParams = (): SearchParams => result ? { q: result.q, scope: result.scope, patientId: result.patientId, source: result.source, type: result.type, page: 1 } : formParams();
+  const appliedParams = (): SearchParams => result ? { q: result.q, scope: result.scope, patientId: result.patientId, type: result.type, page: 1 } : formParams();
 
   useEffect(() => {
     if (stack.length) {
@@ -206,14 +206,10 @@ export default function SearchPage() {
     if (sameConditions(form, result, patient)) return;
     timerRef.current = setTimeout(() => void runSearch(formParams()), 300);
     return () => clearTimeout(timerRef.current);
-  }, [form.q, form.scope, form.source, form.type, patient?.id, runSearch]);
+  }, [form.q, form.scope, form.type, patient?.id, runSearch]);
 
   useEffect(() => () => searchController.current?.abort(), []);
 
-  const changeSource = (source: Source | 'all') => setForm((previous) => {
-    const category = SEARCH_CATEGORIES.find((item) => item.id === previous.type);
-    return { ...previous, source, type: previous.type !== 'all' && source !== 'all' && category && category.source !== source ? 'all' : previous.type };
-  });
   const openDetail = (target: DetailTarget, hit?: SearchHit) => {
     if (frame && frame.target.source === target.source && frame.target.recordType === target.recordType && frame.target.sourceId === target.sourceId) return;
     clearTimeout(timerRef.current);
@@ -265,7 +261,7 @@ export default function SearchPage() {
   };
   const refreshResults = () => {
     const params = appliedParams();
-    setForm({ q: params.q, scope: params.scope || 'all', source: params.source || 'all', type: params.type || 'all' });
+    setForm({ q: params.q, scope: params.scope || 'all', type: params.type || 'all' });
     setStack([]);
     searchScroll.current = 0;
     void runSearch(params, true);
@@ -288,27 +284,29 @@ export default function SearchPage() {
       <section className="panel search-panel" aria-label="搜索条件">
         <div className="scope-row"><span className="control-label">搜索范围</span><div className="scope-options" role="group" aria-label="搜索范围"><button aria-pressed={form.scope === 'all'} className={form.scope === 'all' ? 'selected' : ''} onClick={() => setForm((previous) => ({ ...previous, scope: 'all' }))}>全部患者</button>{patient && <button aria-pressed={form.scope === 'patient'} className={form.scope === 'patient' ? 'selected' : ''} title={`限定为 ${patient.name} · ${patient.number}`} onClick={() => setForm((previous) => ({ ...previous, scope: 'patient' }))}>当前患者：{patient.name} · {patient.number}</button>}</div></div>
         <form className="search-form" onSubmit={(event) => { event.preventDefault(); void runSearch(formParams()); }}><div className="search-input-wrap"><Icon name="search" size={22} /><label className="sr-only" htmlFor="global-search">姓名、放疗号、记录编号或内容关键词</label><input ref={inputRef} id="global-search" value={form.q} onChange={(event) => setForm((previous) => ({ ...previous, q: event.target.value }))} placeholder="搜索姓名、放疗号、记录编号或内容关键词" autoComplete="off" spellCheck={false} />{form.q && <button type="button" className="icon-button clear-input" onClick={clearSearch} aria-label="清空关键词"><Icon name="close" size={18} /></button>}</div><button className="primary-button search-submit" type="submit"><Icon name="search" size={18} />搜索</button></form>
-        <div className="filter-row"><span className="control-label">数据来源</span><div className="filter-options" role="group" aria-label="数据来源">{(['all', 'pms', 'emr'] as const).map((source) => <button key={source} className={form.source === source ? 'selected' : ''} aria-pressed={form.source === source} onClick={() => changeSource(source)}>{source === 'all' ? '全部来源' : source.toUpperCase()}</button>)}</div></div>
       </section>
 
       <section className="results-section" ref={resultsRef} aria-label="搜索结果" aria-busy={loading}>
-        <div className="type-tabs" role="group" aria-label="结果类型"><button className={form.type === 'all' ? 'active' : ''} aria-pressed={form.type === 'all'} onClick={() => setForm((previous) => ({ ...previous, type: 'all' }))}>全部记录{countConditionsMatch && <span>{visibleCategories.reduce((sum, item) => sum + (result!.categoryCounts?.[item.id] ?? 0), 0)}</span>}</button>{visibleCategories.map((item) => <button key={item.id} className={form.type === item.id ? 'active' : ''} aria-pressed={form.type === item.id} onClick={() => setForm((previous) => ({ ...previous, type: item.id }))}>{item.label}{countConditionsMatch && <span>{result!.categoryCounts?.[item.id] ?? 0}</span>}</button>)}</div>
+        <div className="type-tabs" role="group" aria-label="结果类型"><button className={form.type === 'all' ? 'active' : ''} aria-pressed={form.type === 'all'} onClick={() => setForm((previous) => ({ ...previous, type: 'all' }))}>全部记录{countConditionsMatch && <span>{SEARCH_CATEGORIES.reduce((sum, item) => sum + (result!.categoryCounts?.[item.id] ?? 0), 0)}</span>}</button>{SEARCH_CATEGORIES.map((item) => <button key={item.id} className={form.type === item.id ? 'active' : ''} aria-pressed={form.type === item.id} onClick={() => setForm((previous) => ({ ...previous, type: item.id }))}>{item.label}{countConditionsMatch && <span>{result!.categoryCounts?.[item.id] ?? 0}</span>}</button>)}</div>
 
         {newerBatch && <div className="notice update-notice" role="status"><Icon name="refresh" /><div><strong>数据已更新，刷新结果查看</strong><p>当前列表和翻页保留原同步批次。刷新后从第一页展示最新结果。</p></div><button className="secondary-button" onClick={refreshResults}>刷新结果</button></div>}
-        {(loading || dirty) && <div className="query-progress" role="status">{loading ? <span className="spinner small" /> : <Icon name="clock" size={16} />}<span>{loading ? '正在查询' : error ? '本次查询条件' : '等待查询'}“{form.q.trim()}” · {form.scope === 'patient' ? `当前患者 ${patient?.name}` : '全部患者'} · {form.source === 'all' ? '全部来源' : form.source.toUpperCase()} · {categoryLabel(form.type)}</span></div>}
+        {(loading || dirty) && <div className="query-progress" role="status">{loading ? <span className="spinner small" /> : <Icon name="clock" size={16} />}<span>{loading ? '正在查询' : error ? '本次查询条件' : '等待查询'}“{form.q.trim()}” · {form.scope === 'patient' ? `当前患者 ${patient?.name}` : '全部患者'} · {categoryLabel(form.type)}</span></div>}
 
         {error && !notSynced && <div className="notice error-notice" role="alert"><Icon name="info" /><div><strong>{batchUnavailable ? '原查询批次已不可用，请重新查询' : '查询失败'}</strong><p>{error.message}{result ? ` 下方保留上次成功结果（${displayTime(receivedAt)}）。` : ''}</p></div><button className="secondary-button" onClick={() => batchUnavailable ? refreshResults() : void runSearch(attempted || formParams())}>{batchUnavailable ? '重新查询' : '重试'}</button></div>}
 
-        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong>{!result.simulationFiltersNeedSync && <span>共 <b>{result.total}</b> {result.ageFilter || result.patientFilters || result.sexFilter || result.patientCatalogConditions ? '位患者' : '条记录'}</span>}<span className="applied-conditions">{resultScope}<i />{result.source === 'all' ? '全部来源' : result.source.toUpperCase()}<i />{categoryLabel(result.type)}</span></div></div>}
+        {result && <div className="results-summary"><div><span className="applied-label">{dirty || loading || error ? '当前保留结果' : '搜索结果'}</span><strong>“{result.q}”</strong>{!result.simulationFiltersNeedSync && <span>共 <b>{result.total}</b> {result.ageFilter || result.patientFilters || result.sexFilter || result.patientCatalogConditions ? '位患者' : '条记录'}</span>}<span className="applied-conditions">{resultScope}<i />{categoryLabel(result.type)}</span></div></div>}
 
         {result?.simulationFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
-          <span>单据类型 · 定位申请单</span>
+          <span>单据类型 · {result.simulationFilters.documentType ?? '定位申请单'}</span>
           {result.simulationBertConfirmed && <span>BERT 已核对</span>}
           {result.simulationFilters.imagingModality && <span>成像方式 · {result.simulationFilters.imagingModality}</span>}
           {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}
+          {result.simulationFilters.fields?.map(({ label, operator, value }, index) => <span key={index}>
+            {label} {{ eq: '·', contains: '包含', lt: '<', lte: '≤', gt: '>', gte: '≥' }[operator]} {value}
+          </span>)}
         </div>}
-        {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少定位申请单的字段，请重新同步后再查。</p><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button></div>}
+        {result?.simulationFiltersNeedSync && <div className="panel empty-state" role="status"><h2>需要重新同步搜索数据</h2><p>当前批次缺少单据筛选所需字段，请重新同步后再查。</p><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button></div>}
         {(result?.patientCatalogConditions || result?.ageFilter || result?.sexFilter) && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
           {result.ageFilter && <span>年龄 {result.ageFilter.operator} {result.ageFilter.years} 周岁</span>}
@@ -329,7 +327,7 @@ export default function SearchPage() {
         {!form.q.trim() && !result && <div className="panel empty-state compact"><h2>输入关键词开始搜索</h2></div>}
         {form.q.trim() && notSynced && !result && <div className="panel empty-state"><div className="state-icon"><Icon name="database" size={30} /></div><h2>尚未同步搜索数据</h2><p>输入条件已保留。完成首次完整同步后即可开始搜索。</p><div className="button-row"><button className="primary-button" disabled={syncing} onClick={() => void runSync()}>{syncing ? '正在同步…' : '同步数据'}</button><button className="text-button" onClick={() => setShowSyncHelp(true)}>查看同步说明</button></div></div>}
         {loading && !result && !notSynced && <div className="panel skeleton-list" aria-hidden="true">{[1, 2, 3].map((item) => <div className="skeleton-row" key={item}><span /><div><i /><i /><i /></div></div>)}</div>}
-        {result && result.total === 0 && !result.simulationFiltersNeedSync && <div className="panel empty-state"><div className="state-icon"><Icon name="search" size={30} /></div><h2>{(result.patientFilters || result.ageFilter) ? '未找到符合条件的患者' : '未找到匹配记录'}</h2><p>可以修改搜索内容，或调整患者范围与来源。</p><div className="button-row"><button className="secondary-button" onClick={() => { inputRef.current?.focus(); inputRef.current?.select(); }}>修改关键词</button><button className="text-button" onClick={clearSearch}>清空关键词</button></div></div>}
+        {result && result.total === 0 && !result.simulationFiltersNeedSync && <div className="panel empty-state"><div className="state-icon"><Icon name="search" size={30} /></div><h2>{(result.patientFilters || result.ageFilter) ? '未找到符合条件的患者' : '未找到匹配记录'}</h2><p>可以修改搜索内容，或调整患者范围。</p><div className="button-row"><button className="secondary-button" onClick={() => { inputRef.current?.focus(); inputRef.current?.select(); }}>修改关键词</button><button className="text-button" onClick={clearSearch}>清空关键词</button></div></div>}
         {result && result.hits.length > 0 && <div className="panel result-list">{result.hits.map((hit) => <ResultCard key={hit.id} hit={hit} query={result.q} onOpen={() => openDetail({ source: hit.source, recordType: hit.recordType, sourceId: hit.sourceId, patientId: hit.patientId, title: hit.title }, hit)} onPatient={() => openDetail({ source: 'pms', recordType: 'patient', sourceId: hit.patientId, patientId: hit.patientId, title: hit.patientName }, hit.recordType === 'patient' ? hit : undefined)} />)}</div>}
         {result && result.total > 0 && <div className="pagination"><span>第 {(result.page - 1) * result.pageSize + 1}–{Math.min(result.page * result.pageSize, result.total)} 条，共 {result.total} 条<span className="page-size">每页 20 条</span></span><div><button className="secondary-button" disabled={result.page <= 1 || loading || dirty} onClick={() => void runSearch({ ...appliedParams(), page: result.page - 1, batchId: result.batchId }, true)}>上一页</button><span className="page-counter">{result.page} <span>/ {Math.ceil(result.total / result.pageSize)}</span></span><button className="secondary-button" disabled={result.page * result.pageSize >= result.total || loading || dirty} onClick={() => void runSearch({ ...appliedParams(), page: result.page + 1, batchId: result.batchId }, true)}>下一页</button></div></div>}
       </section>

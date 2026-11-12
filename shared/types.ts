@@ -88,8 +88,17 @@ export interface PatientSearchFilters {
   diagnosedThrough: string;
   minimumFractions?: number;
   codingSystems?: string[];
+  indexedDiagnosisTitles?: string[];
+}
+export interface SimulationFieldCondition {
+  label: string;
+  operator: 'eq' | 'contains' | 'lt' | 'lte' | 'gt' | 'gte';
+  value: string;
+  numeric?: boolean;
 }
 export interface SimulationSearchFilters {
+  documentType?: string;
+  fields?: SimulationFieldCondition[];
   imagingModality?: string;
   localizationSite?: string;
 }
