@@ -54,6 +54,11 @@ function literalSubstringPattern(value: string) {
   return '*' + value.replace(/[\\*?]/gu, '\\$&') + '*';
 }
 
+function keywordSexCode(query: string) {
+  const value = query.toLowerCase();
+  return Object.keys(patientSexLabels).find(code => code === value || patientSexLabels[code] === value);
+}
+
 export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string, catalogConditions?: PatientCatalogCondition[], ageFilter?: PatientAgeFilter, diagnosisTitle?: string) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
@@ -177,15 +182,18 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       sort: [{ radiotherapyNo: 'asc' }, { id: 'asc' }],
     };
   }
+  const keywordSex = keywordSexCode(params.q);
   return {
     ...resultWindow,
     track_scores: true,
     query: { bool: {
       filter: filters,
       should: [
+        ...(keywordSex ? [{ bool: { filter: [{ term: { recordType: 'patient' } }],
+          must: [{ term: { sex: { value: keywordSex, boost: 10 } } }] } }] : []),
         ...['radiotherapyNo', 'recordNo', 'code'].map(field => ({ term: { [field]: { value: params.q, boost: 10 } } })),
-        { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'patientFields', size: 5 } } },
-        { nested: { path: 'recordFields', score_mode: 'max', query: { term: { 'recordFields.value': { value: params.q, boost: 10 } } }, inner_hits: { name: 'recordFields', size: 5 } } },
+        { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } } } },
+        { nested: { path: 'recordFields', score_mode: 'max', query: { term: { 'recordFields.value': { value: params.q, boost: 10 } } } } },
         { multi_match: { query: params.q, fields: queryFields, type: 'best_fields', operator: 'and' } },
       ],
       minimum_should_match: 1,
@@ -479,20 +487,15 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         const value = record[field];
         if (value === params.q) matchedFields.push({ field, label: fieldLabel(field, record.recordType), text: value, ranges: [[0, value.length]] });
       }
-      for (const inner of hit.inner_hits?.patientFields?.hits.hits ?? []) {
-        const label = inner._source?.label;
-        const value = inner._source?.value;
-        if (!label || !value) continue;
-        for (const match of matchedPatientFields(params.q, [{ label, value }])) {
-          if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push(match);
-        }
+      const isKeyword = !diagnosisTitle && !patientFilters && !catalogConditions && !simulationFilters;
+      if (isKeyword && record.recordType === 'patient' && record.sex && record.sex === keywordSexCode(params.q)) {
+        const text = patientSexLabels[record.sex] ?? record.sex;
+        matchedFields.push({ field: 'sex', label: '性别', text, ranges: [[0, text.length]] });
       }
-      for (const inner of hit.inner_hits?.recordFields?.hits.hits ?? []) {
-        const label = inner._source?.label;
-        const value = inner._source?.value;
-        if (!label || !value) continue;
-        for (const match of matchedPatientFields(params.q, [{ label, value }])) {
-          if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push({ ...match, field: 'recordFields' });
+      if (isKeyword) {
+        for (const field of ['patientFields', 'recordFields'] as const) {
+          const exact = record[field]?.filter(entry => entry.value === params.q);
+          for (const match of matchedPatientFields(params.q, exact)) matchedFields.push({ ...match, field });
         }
       }
       for (const field of Object.keys(textFields)) {
@@ -508,7 +511,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
           const matches = matchedPatientFields(params.q, record.recordFields);
           if (matches.length) {
             for (const match of matches) {
-              if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push(match);
+              if (!matchedFields.some(existing => existing.label === match.label && existing.text === match.text)) matchedFields.push({ ...match, field: 'recordFields' });
             }
             continue;
           }
