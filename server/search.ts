@@ -5,11 +5,11 @@ import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { diagnosisValueSet, nasopharynxValueSet } from './diagnosis-terminology.js';
 import { birthDateRange } from './patient-query.js';
 import { predictDiagnosisFilters, predictPatientConditions, rerankHits } from './search-models.js';
-import { patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
+import { patientSearchCatalog, patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
-import { documentNumericLabels } from './document-field-query.js';
+import { documentNumericLabels, fieldOwners } from './document-field-query.js';
 import { readableText } from './sources/text.js';
-import { parseDocumentBertCondition } from './document-bert-query.js';
+import { predictDocumentCondition } from './document-bert-query.js';
 import { osRequest } from './opensearch.js';
 
 const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
@@ -298,23 +298,88 @@ export function assertCompleteResponse(response: Pick<EngineResponse, 'timed_out
   }
 }
 
+async function hasKeywordEvidence(index: string, params: NormalizedSearch) {
+  const value = params.q;
+  const pattern = '*' + value.replace(/[\\*?]/gu, '\\$&') + '*';
+  const query = { bool: {
+    filter: [
+      ...(params.scope === 'patient' ? [{ term: { patientId: params.patientId } }] : []),
+      ...(params.source !== 'all' ? [{ term: { source: params.source } }] : []),
+    ],
+    should: [
+      ...['radiotherapyNo', 'recordNo', 'code', 'patientName.keyword', 'title.keyword', 'documentType.keyword']
+        .map(field => ({ term: { [field]: value } })),
+      ...['patientFields', 'recordFields'].map(path => ({
+        nested: { path, query: { wildcard: { [path + '.value']: { value: pattern } } } },
+      })),
+      ...['bodyText', 'patientProfile'].map(field => ({ match_phrase: { [field]: value } })),
+    ],
+    minimum_should_match: 1,
+  } };
+  const response = await osRequest<{ count: number; _shards: { failed: number } }>(
+    `/${encodeURIComponent(index)}/_count`, 'POST', { query });
+  if (response._shards.failed) throw new AppError('SEARCH_UNAVAILABLE', '搜索暂时不可用，请重试。', 503);
+  return response.count > 0;
+}
+
+async function completeIndexedValue(index: string, query: string, fragment: string, label: string,
+  owner: { field: 'documentType.keyword' | 'recordType'; value: string }, path: 'recordFields' | 'patientFields', contains = false) {
+  const chars = Array.from(query);
+  const variants = new Set<string>();
+  const normalizedFragment = fragment.normalize('NFKC');
+  for (let start = 0; start < chars.length; start++) {
+    for (let end = start + 1; end <= chars.length; end++) {
+      const value = chars.slice(start, end).join('').trim();
+      if (value && value.normalize('NFKC').includes(normalizedFragment)) variants.add(value);
+    }
+  }
+  if (!variants.size) return undefined;
+  const response = await osRequest<{ aggregations: { fields: { matching: { values: { buckets: { key: string }[]; sum_other_doc_count: number } } } } }>(
+    `/${encodeURIComponent(index)}/_search?allow_partial_search_results=false`, 'POST', {
+      size: 0,
+      query: { term: { [owner.field]: owner.value } },
+      aggs: { fields: { nested: { path }, aggs: { matching: { filter: { bool: { filter: [
+        { term: { [path + '.label']: label } },
+        contains ? { wildcard: { [path + '.value']: { value: '*' + fragment.replace(/[\\*?]/gu, '\\$&') + '*' } } }
+          : { terms: { [path + '.value']: [...variants] } },
+      ] } }, aggs: { values: { terms: { field: path + '.value', size: contains ? 4096 : variants.size } } } } } } },
+    });
+  const matches = response.aggregations.fields.matching.values;
+  if (matches.sum_other_doc_count) return undefined;
+  const indexed = matches.buckets.map(bucket => bucket.key);
+  const values = contains
+    ? [...variants].filter(value => indexed.some(original => original.includes(value)))
+    : indexed;
+  const maximal = values.filter(value => !values.some(other => other !== value && other.includes(value)));
+  return maximal.length === 1 ? maximal[0] : undefined;
+}
+
 export async function searchRecords(input: SearchParams): Promise<SearchResponse> {
   const params = validateSearchParams(input as unknown as Record<string, unknown>);
   const started = performance.now();
   try {
     const batch = await resolveBatch(params.batchId);
-    const scoped = config.documentBertDir && params.source !== 'pms' && params.source !== 'rvs'
-      ? await parseDocumentBertCondition(params.q) : undefined;
+    let keywordEvidence: Promise<boolean> | undefined;
+    const keywordMatch = () => keywordEvidence ??= hasKeywordEvidence(batch.index, params);
+    let scoped = config.documentBertDir && params.source !== 'pms' && params.source !== 'rvs'
+      ? await predictDocumentCondition(params.q, (type, label, fragment) =>
+        completeIndexedValue(batch.index, params.q, fragment, label,
+          { field: 'documentType.keyword', value: type }, 'recordFields', true)) : undefined;
+    if (scoped && await keywordMatch()) scoped = undefined;
     if (scoped === 'unavailable') throw new AppError('DOCUMENT_MODEL_UNAVAILABLE', '单据筛选暂不可用，请稍后重试。', 503);
     if (scoped === 'review') throw new AppError('INVALID_QUERY', '请明确单据类型，并填写一个字段筛选条件。');
     const simulationFilters: SimulationSearchFilters | undefined = scoped ? {
       documentType: scoped.type,
-      fields: scoped.conditions.map(condition => ({
-        ...condition, numeric: documentNumericLabels.get(scoped.type)?.has(condition.label),
+      fields: await Promise.all(scoped.conditions.map(async condition => {
+        const numeric = documentNumericLabels.get(scoped.type)?.has(condition.label)
+          && (condition.operator !== 'eq' || Number.isFinite(Number(condition.value)));
+        const value = (condition.operator === 'eq' || condition.operator === 'contains') && !numeric && batch.meta.supportsDocumentFieldConditions
+          ? await completeIndexedValue(batch.index, params.q, condition.value, condition.label,
+            { field: 'documentType.keyword', value: scoped.type }, 'recordFields', condition.operator === 'contains') ?? condition.value : condition.value;
+        return { ...condition, value, numeric };
       })),
     } : undefined;
-    if (simulationFilters && (simulationFilters.documentType ? !batch.meta.supportsDocumentFieldConditions
-      : simulationFilters.fields ? !batch.meta.supportsSimulationFieldConditions : !batch.meta.supportsSimulationFilters)) {
+    if (simulationFilters && !batch.meta.supportsDocumentFieldConditions) {
       return {
         ...params, simulationFilters, simulationFiltersNeedSync: true, pageSize: 20, total: 0,
         typeCounts: Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>,
@@ -323,17 +388,63 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       };
     }
     const canUseCatalog = params.source !== 'emr' && params.source !== 'rvs';
-    const diagnosis = !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
-    if (diagnosis === 'review') {
-      throw new AppError('INVALID_QUERY', '请输入完整诊断名称，或明确的确诊病种和日期范围。');
-    }
+    let diagnosis = !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
+    if (diagnosis && diagnosis !== 'keyword' && await keywordMatch()) diagnosis = 'keyword';
     const diagnosisTitle = diagnosis && typeof diagnosis === 'object' && 'diagnosisTitle' in diagnosis ? diagnosis.diagnosisTitle : undefined;
     const patientFilters = diagnosis && typeof diagnosis === 'object' && 'diagnosedFrom' in diagnosis ? diagnosis : undefined;
-    const predicted = !simulationFilters && !diagnosis && canUseCatalog ? await predictPatientConditions(params.q) : undefined;
-    if (predicted === 'review' || (predicted && predicted.length !== 1)) {
+    let catalogConditions = !simulationFilters && (!diagnosis || diagnosis === 'review') && canUseCatalog
+      ? await predictPatientConditions(params.q, (label, fragment) =>
+        completeIndexedValue(batch.index, params.q, fragment, label,
+          { field: 'recordType', value: 'patient' }, 'patientFields')) : undefined;
+    if (catalogConditions && await keywordMatch()) catalogConditions = undefined;
+    if (Array.isArray(catalogConditions)
+      && !patientSearchCatalog.some(field => params.q.includes(field.label))
+      && [...fieldOwners.keys()].some(label => params.q.includes(label))) {
+      catalogConditions = 'review';
+    }
+    if (diagnosis === 'review') {
+      const condition = Array.isArray(catalogConditions) && catalogConditions.length === 1 ? catalogConditions[0] : undefined;
+      const named = patientSearchCatalog.filter(entry => params.q.includes(entry.label));
+      const field = condition && (named.length === 1 ? named[0] : patientSearchFieldById.get(condition.id));
+      let value: string | undefined;
+      if (field && condition && params.q.includes(field.label)) {
+        if (field.indexField) {
+          const response = await osRequest<{ count: number; _shards: { failed: number } }>(
+            `/${encodeURIComponent(batch.index)}/_count`, 'POST', { query: { bool: { filter: [
+              { term: { recordType: 'patient' } }, { term: { [field.indexField]: condition.value } },
+            ] } } });
+          if (!response._shards.failed && response.count > 0) value = condition.value;
+        } else {
+          value = await completeIndexedValue(batch.index, params.q, condition.value, field.label,
+            { field: 'recordType', value: 'patient' }, 'patientFields');
+        }
+      }
+      if (value === undefined || !condition) {
+        throw new AppError('INVALID_QUERY', '请输入完整诊断名称，或明确的确诊病种和日期范围。');
+      }
+      catalogConditions = [{ id: field!.id, value }];
+    }
+    if (catalogConditions === 'review' || (catalogConditions && catalogConditions.length !== 1)) {
       throw new AppError('PATIENT_QUERY_NEEDS_DETAIL', '请填写一个明确的患者筛选条件，或直接输入关键词。');
     }
-    const catalogConditions = predicted;
+    if (catalogConditions && diagnosis !== 'review') {
+      const [condition] = catalogConditions;
+      const mentionedFields = patientSearchCatalog.filter(field => params.q.includes(field.label));
+      const namedFields = mentionedFields.filter(field => !mentionedFields.some(other =>
+        other.id !== field.id && other.label.includes(field.label)));
+      const field = namedFields.length === 1 ? namedFields[0] : patientSearchFieldById.get(condition.id);
+      if (field && !field.indexField) {
+        const value = await completeIndexedValue(batch.index, params.q, condition.value, field.label,
+          { field: 'recordType', value: 'patient' }, 'patientFields');
+        if (value !== undefined) catalogConditions = [{ id: field.id, value }];
+      } else if (field?.indexField === 'patientName.keyword' && field.id !== condition.id) {
+        const response = await osRequest<{ count: number }>(
+          `/${encodeURIComponent(batch.index)}/_count`, 'POST', { query: { bool: { filter: [
+            { term: { recordType: 'patient' } }, { term: { [field.indexField]: condition.value } },
+          ] } } });
+        if (response.count > 0) catalogConditions = [{ ...condition, id: field.id }];
+      }
+    }
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;

@@ -95,14 +95,40 @@ const patientBert = new ModelWorker('patient-bert',
   process.env.SEARCH_BERT_PYTHON || path.join(config.runtimeDir, 'bert-pilot/venv/bin/python'),
   process.env.SEARCH_PATIENT_BERT_MODEL_DIR || path.join(config.runtimeDir, 'patient-bert-pilot/catalog-checkpoint'));
 
-export async function predictPatientConditions(query: string): Promise<PatientCatalogCondition[] | 'review' | undefined> {
+let patientPending: Promise<unknown> = Promise.resolve();
+
+export function joinSingleValueFragments(query: string, fields: { field: string; text: string }[]) {
+  if (fields.length < 2 || fields.some(field => field.field !== fields[0].field || !field.text)) return undefined;
+  const text = query.normalize('NFKC');
+  let start = -1;
+  let end = 0;
+  for (const field of fields) {
+    const next = text.indexOf(field.text, end);
+    if (next < 0 || text.indexOf(field.text, next + field.text.length) !== -1) return undefined;
+    if (start < 0) start = next;
+    end = next + field.text.length;
+  }
+  return text.slice(start, end);
+}
+
+export async function predictPatientConditions(query: string, verifySplit?: (label: string, value: string) => Promise<string | undefined>): Promise<PatientCatalogCondition[] | 'review' | undefined> {
   if (!process.env.SEARCH_PATIENT_BERT_MODEL_DIR) return undefined;
-  const prediction = await patientBert.predict({ query }) as {
+  const pending = patientPending.then(() => patientBert.predict({ query }));
+  patientPending = pending.catch(() => undefined);
+  const prediction = await pending as {
     intent?: string; confidence?: number; fields?: { field: string; text: string }[];
   } | undefined;
   if (!prediction?.intent || prediction.intent === 'KEYWORD') return undefined;
   if (prediction.intent === 'REVIEW') return 'review';
   const expected = { FILTER1: 1, FILTER2: 2, FILTER3: 3 }[prediction.intent];
+  if (expected === 1 && prediction.confidence! >= .75 && verifySplit && Array.isArray(prediction.fields) && prediction.fields.length > 1) {
+    const field = patientSearchFieldById.get(prediction.fields[0].field);
+    const fragment = joinSingleValueFragments(query, prediction.fields);
+    if (field && !field.indexField && query.includes(field.label) && fragment) {
+      const value = await verifySplit(field.label, fragment);
+      if (value) prediction.fields = [{ field: field.id, text: value }];
+    }
+  }
   if (!expected || !Number.isFinite(prediction.confidence) || prediction.confidence! < 0.75
     || !Array.isArray(prediction.fields) || prediction.fields.length !== expected) return 'review';
 
@@ -110,10 +136,14 @@ export async function predictPatientConditions(query: string): Promise<PatientCa
   const sex: Record<string, string> = { 男: 'male', 男性: 'male', 女: 'female', 女性: 'female', 其他: 'other', 未知: 'unknown' };
   for (const item of prediction.fields) {
     const field = patientSearchFieldById.get(item.field);
-    const raw = item.text.trim();
+    let raw = item.text.trim();
     if (!field || !raw || fields.some(entry => entry.id === field.id)) return 'review';
     const allowedValues = patientSearchEnumValues.get(field.label);
-    if (allowedValues && !allowedValues.has(raw)) return 'review';
+    if (allowedValues && !allowedValues.has(raw)) {
+      const candidates = [...allowedValues].filter(value => value.includes(raw) && query.normalize('NFKC').includes(value));
+      if (candidates.length !== 1 || !query.includes(field.label)) return 'review';
+      raw = candidates[0];
+    }
     if (field.indexField === 'birthDate') {
       const timestamp = Date.parse(raw);
       if (!/^\d{4}-\d{2}-\d{2}$/u.test(raw) || !Number.isFinite(timestamp)

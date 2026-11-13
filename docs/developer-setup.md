@@ -107,34 +107,33 @@ python3.13 -m venv .runtime/bge-venv
 
 ## 当前全局搜索的 BERT 权重
 
-从 [OIS Search BERT v2](https://github.com/VINEtom/OpenSearch/releases/tag/ois-search-bert-v2) 下载患者、单据权重包及校验文件。从 [诊断 BERT v3](https://github.com/VINEtom/OpenSearch/releases/tag/ois-diagnosis-bert-v3) 下载诊断权重和校验文件。BGE Reranker 按第 3 节安装。三个 BERT 共用 `SEARCH_BERT_PYTHON`。
+从 [OIS Search BERT v4](https://github.com/VINEtom/OpenSearch/releases/tag/ois-search-bert-v4) 下载四个权重包和 `SHA256SUMS-ois-search-bert-v4.txt`，放在同一目录。包内包含患者模型、单据主模型、单据后备模型和诊断模型。四套权重共用 `SEARCH_BERT_PYTHON`。BGE Reranker 按第 3 节安装。
 
-在下载目录校验，macOS 可用 `awk '/ois-(patient|document)-bert-v2/' SHA256SUMS-ois-search-bert-v2.txt | shasum -a 256 -c` 校验 v2 的两个包，并用 `shasum -a 256 -c SHA256SUMS-ois-diagnosis-bert-v3.txt` 校验诊断包。
+在下载目录执行校验。macOS 可使用 `shasum -a 256 -c SHA256SUMS-ois-search-bert-v4.txt`。
 
 ```sh
-sha256sum --ignore-missing -c SHA256SUMS-ois-search-bert-v2.txt
-sha256sum -c SHA256SUMS-ois-diagnosis-bert-v3.txt
+sha256sum -c SHA256SUMS-ois-search-bert-v4.txt
 ```
 
-在项目根目录解压。
+在项目根目录解压，将路径替换为实际下载目录。
 
 ```sh
 mkdir -p .runtime/models
-for model in patient document; do
-  tar -xzf "/path/to/downloads/ois-$model-bert-v2.tar.gz" -C .runtime/models
+for model in patient document document-fallback diagnosis; do
+  tar -xzf "/path/to/downloads/ois-${model}-bert-v4.tar.gz" -C .runtime/models
 done
-tar -xzf "/path/to/downloads/ois-diagnosis-bert-v3.tar.gz" -C .runtime/models
 ```
 
-在 `.env` 配置模型绝对路径。
+在 `.env` 中配置解压后的绝对路径。两套单据权重各自使用包内的 `labels.json`。单据主模型要求改写时，服务使用后备模型复核。
 
 ```dotenv
-SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-patient-bert-v2
-SEARCH_DOCUMENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-document-bert-v2
-SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnosis-bert-v3
+SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-patient-bert-v4
+SEARCH_DOCUMENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-document-bert-v4
+SEARCH_DOCUMENT_BERT_FALLBACK_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-document-fallback-bert-v4
+SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnosis-bert-v4
 ```
 
-单据模型包中的 `labels.json` 与权重配套。诊断 BERT v3 支持明确的确诊日期查询和完整诊断名称查询。可用「最近10个月确诊鼻咽癌」和「诊断名称是C50.9未特指的乳腺恶性肿瘤」验证诊断搜索。
+重启搜索服务后，可用「主诊医生为颜艳」「找总次数不少于20次的计划申请单」和「诊断名称是C50.9未特指的乳腺恶性肿瘤」检查三个搜索入口。结果数量取决于本机索引批次。
 
 构建执行 `npm run build`。保留同一份 `web/dist` 和对应的服务端源码，启动时可用 `WEB_DIST_DIR` 指向构建产物。集成环境使用独立的 `OPENSEARCH_INDEX_ALIAS` 和 `RUNTIME_DIR`。
 

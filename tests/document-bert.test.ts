@@ -23,12 +23,12 @@ test('第四轮单条件使用确认后的单据类型、字段、数值和比�
   assert.equal(await parseDocumentBertCondition(query, () => afterModel), 'review');
 });
 
-test('第四轮在调用模型前跳过缺类型并拒绝多个字段', async () => {
+test('跳过缺类型并在取值核验后拒绝多个条件', async () => {
   const unexpected = () => assert.fail('不应调用模型');
   assert.equal(await parseDocumentBertCondition('靶区部位是头部', unexpected), undefined);
   for (const input of ['找总次数为20且总次数不少于19的计划申请单',
     '找扫描部位是胸部以及固定部位是头部的复位申请单']) {
-    assert.equal(await parseDocumentBertCondition(input, unexpected), 'review');
+    assert.equal(await parseDocumentBertCondition(input, () => model), 'review');
   }
   assert.equal(await parseDocumentBertCondition('胸部', unexpected), undefined);
 });
@@ -36,4 +36,16 @@ test('第四轮在调用模型前跳过缺类型并拒绝多个字段', async ()
 test('第四轮将模型文件缺失和推理失败标记为不可用', async () => {
   assert.equal(await parseDocumentBertCondition(query, () => undefined), 'unavailable');
   assert.equal(await parseDocumentBertCondition(query, () => ({ ...model, predict: async () => null })), 'unavailable');
+});
+
+test('字段值可以和字段名相同', async () => {
+  const candidate = {
+    labels: { order: { kind: '计划申请单', label: '补充医嘱', operators: ['contains'] } },
+    async predict() {
+      return { intent: 'FILTER1', confidence: .99, fields: [{ field: 'order_contains', text: '补充医嘱' }] };
+    },
+  };
+  assert.deepEqual(await parseDocumentBertCondition('找补充医嘱包含补充医嘱的计划申请单', () => candidate), {
+    type: '计划申请单', conditions: [{ label: '补充医嘱', operator: 'contains', value: '补充医嘱' }],
+  });
 });
