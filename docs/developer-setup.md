@@ -107,21 +107,23 @@ python3.13 -m venv .runtime/bge-venv
 
 ## 当前全局搜索的 BERT 权重
 
-从 [OIS Search BERT v2](https://github.com/VINEtom/OpenSearch/releases/tag/ois-search-bert-v2) 下载患者、单据和诊断三个权重包及校验文件。BGE Reranker 按第 3 节安装。三个 BERT 共用 `SEARCH_BERT_PYTHON`。
+从 [OIS Search BERT v2](https://github.com/VINEtom/OpenSearch/releases/tag/ois-search-bert-v2) 下载患者、单据权重包及校验文件。从 [诊断 BERT v3](https://github.com/VINEtom/OpenSearch/releases/tag/ois-diagnosis-bert-v3) 下载诊断权重和校验文件。BGE Reranker 按第 3 节安装。三个 BERT 共用 `SEARCH_BERT_PYTHON`。
 
-在下载目录校验，macOS 可将 `sha256sum -c` 换成 `shasum -a 256 -c`。
+在下载目录校验，macOS 可用 `awk '/ois-(patient|document)-bert-v2/' SHA256SUMS-ois-search-bert-v2.txt | shasum -a 256 -c` 校验 v2 的两个包，并用 `shasum -a 256 -c SHA256SUMS-ois-diagnosis-bert-v3.txt` 校验诊断包。
 
 ```sh
-sha256sum -c SHA256SUMS-ois-search-bert-v2.txt
+sha256sum --ignore-missing -c SHA256SUMS-ois-search-bert-v2.txt
+sha256sum -c SHA256SUMS-ois-diagnosis-bert-v3.txt
 ```
 
 在项目根目录解压。
 
 ```sh
 mkdir -p .runtime/models
-for model in patient document diagnosis; do
+for model in patient document; do
   tar -xzf "/path/to/downloads/ois-$model-bert-v2.tar.gz" -C .runtime/models
 done
+tar -xzf "/path/to/downloads/ois-diagnosis-bert-v3.tar.gz" -C .runtime/models
 ```
 
 在 `.env` 配置模型绝对路径。
@@ -129,10 +131,10 @@ done
 ```dotenv
 SEARCH_PATIENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-patient-bert-v2
 SEARCH_DOCUMENT_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-document-bert-v2
-SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnosis-bert-v2
+SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnosis-bert-v3
 ```
 
-单据模型包中的 `labels.json` 与权重配套。诊断模型用于本地确诊查询验证。可用「主诊医生为颜艳」「总次数不少于20次的计划申请单」「最近10个月确诊鼻咽癌」检查三个入口。
+单据模型包中的 `labels.json` 与权重配套。诊断 BERT v3 支持明确的确诊日期查询和完整诊断名称查询。可用「最近10个月确诊鼻咽癌」和「诊断名称是C50.9未特指的乳腺恶性肿瘤」验证诊断搜索。
 
 构建执行 `npm run build`。保留同一份 `web/dist` 和对应的服务端源码，启动时可用 `WEB_DIST_DIR` 指向构建产物。集成环境使用独立的 `OPENSEARCH_INDEX_ALIAS` 和 `RUNTIME_DIR`。
 

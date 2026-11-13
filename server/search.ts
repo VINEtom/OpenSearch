@@ -50,7 +50,7 @@ const textFields = {
   patientProfile: { boost: 2, highlight: { fragment_size: 120, number_of_fragments: 1 } },
 };
 
-export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string, catalogConditions?: PatientCatalogCondition[], ageFilter?: PatientAgeFilter) {
+export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string, catalogConditions?: PatientCatalogCondition[], ageFilter?: PatientAgeFilter, diagnosisTitle?: string) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
   const queryFields = fields.map(([field, options]) => `${field}^${options.boost}`);
@@ -75,6 +75,17 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       documentTypes: { terms: { field: 'documentType.keyword', size: 30 } },
     },
   };
+  if (diagnosisTitle) {
+    return {
+      ...resultWindow,
+      query: { bool: { filter: [
+        ...filters,
+        { term: { recordType: 'diagnosis' } },
+        { term: { 'title.keyword': diagnosisTitle } },
+      ] } },
+      sort: [{ updatedAt: 'desc' }, { id: 'asc' }],
+    };
+  }
   if (simulationFilters) {
     return {
       ...resultWindow,
@@ -314,10 +325,11 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const canUseCatalog = params.source !== 'emr' && params.source !== 'rvs';
     const diagnosis = !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
     if (diagnosis === 'review') {
-      throw new AppError('INVALID_QUERY', '诊断筛选仅支持明确的确诊病种和日期范围，也可以直接输入病名搜索。');
+      throw new AppError('INVALID_QUERY', '请输入完整诊断名称，或明确的确诊病种和日期范围。');
     }
-    const patientFilters = diagnosis;
-    const predicted = !simulationFilters && !patientFilters && canUseCatalog ? await predictPatientConditions(params.q) : undefined;
+    const diagnosisTitle = diagnosis && typeof diagnosis === 'object' && 'diagnosisTitle' in diagnosis ? diagnosis.diagnosisTitle : undefined;
+    const patientFilters = diagnosis && typeof diagnosis === 'object' && 'diagnosedFrom' in diagnosis ? diagnosis : undefined;
+    const predicted = !simulationFilters && !diagnosis && canUseCatalog ? await predictPatientConditions(params.q) : undefined;
     if (predicted === 'review' || (predicted && predicted.length !== 1)) {
       throw new AppError('PATIENT_QUERY_NEEDS_DETAIL', '请填写一个明确的患者筛选条件，或直接输入关键词。');
     }
@@ -325,7 +337,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;
-    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, undefined, undefined, catalogConditions));
+    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, undefined, undefined, catalogConditions, undefined, diagnosisTitle));
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
@@ -334,6 +346,9 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const hits = response.hits.hits.map(hit => {
       const record = hit._source;
       const matchedFields = catalogConditions ? matchedPatientConditions(record, catalogConditions) : [];
+      if (diagnosisTitle && record.title === diagnosisTitle) {
+        matchedFields.push({ field: 'title', label: titleLabels.diagnosis, text: record.title, ranges: [[0, record.title.length]] });
+      }
       for (const field of ['radiotherapyNo', 'recordNo', 'code'] as const) {
         const value = record[field];
         if (value === params.q) matchedFields.push({ field, label: fieldLabel(field, record.recordType), text: value, ranges: [[0, value.length]] });
@@ -395,7 +410,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       }
       return { ...record, matchedFields };
     });
-    const textForRanking = !patientFilters && !simulationFilters && !catalogConditions && params.q.length >= 10
+    const textForRanking = !diagnosisTitle && !patientFilters && !simulationFilters && !catalogConditions && params.q.length >= 10
       && !hits.some(hit => hit.matchedFields.some(field => ['radiotherapyNo', 'recordNo', 'code'].includes(field.field)));
     const rankedHits = textForRanking ? await rerankHits(params.q, hits) : hits;
     return { ...params, ...(patientFilters ? { patientFilters } : {}), ...(catalogConditions ? { patientCatalogConditions: catalogConditions } : {}),

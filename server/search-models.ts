@@ -133,16 +133,27 @@ const diagnosisBert = diagnosisModelDir && new ModelWorker('patient-bert',
   diagnosisModelDir);
 let diagnosisPending: Promise<unknown> = Promise.resolve();
 
-export async function predictDiagnosisFilters(query: string, index: string): Promise<PatientSearchFilters | 'review' | undefined> {
+export async function predictDiagnosisFilters(query: string, index: string): Promise<PatientSearchFilters | { diagnosisTitle: string } | 'keyword' | 'review' | undefined> {
   const normalizedQuery = query.normalize('NFKC');
-  if (!diagnosisBert || !normalizedQuery.includes('月') || !/\d/u.test(normalizedQuery)) return undefined;
+  if (!diagnosisBert) return undefined;
   const pending = diagnosisPending.then(() => diagnosisBert.predict({ query }));
   diagnosisPending = pending.catch(() => undefined);
   const prediction = await pending as {
     intent?: string; confidence?: number; fields?: { field: string; text: string }[];
   } | undefined;
-  if (!prediction?.intent || prediction.intent === 'KEYWORD') return undefined;
-  if (!Number.isFinite(prediction.confidence) || prediction.confidence! < 0.75) return 'review';
+  if (!prediction?.intent || prediction.intent === 'FILTER2') return undefined;
+  const confident = Number.isFinite(prediction.confidence) && prediction.confidence! >= 0.75;
+  if (prediction.intent === 'KEYWORD') return confident ? 'keyword' : undefined;
+  if (prediction.intent === 'FILTER1' && confident && prediction.fields?.length === 1) {
+    const [field] = prediction.fields;
+    if (field.field !== 'TITLE_value' || !field.text || !normalizedQuery.includes(field.text)) return 'review';
+    const terms = await indexedDiagnosisTerms(index);
+    const titles = [...new Set(terms.map(term => term.title))];
+    const title = titles.find(value => value === field.text);
+    if (!title || titles.some(value => value.length > title.length && value.includes(title) && normalizedQuery.includes(value))) return 'review';
+    return { diagnosisTitle: title };
+  }
+  if (!confident) return undefined;
   if (prediction.intent !== 'FILTER3' || !prediction.fields) return 'review';
 
   const monthFields = prediction.fields.filter(item => item.field === 'MONTHS_value');
