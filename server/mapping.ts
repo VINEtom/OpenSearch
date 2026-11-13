@@ -13,7 +13,7 @@ export const recordProperties = {
   imagingModality: { type: 'keyword' }, localizationSites: { type: 'keyword' },
   patientFields: { type: 'nested', properties: { label: { type: 'keyword' }, value: { type: 'keyword', ignore_above: 512 } } },
   patientProfile: { type: 'text', analyzer: 'cjk', fields: { han } },
-  recordFields: { type: 'nested', properties: { label: { type: 'keyword' }, value: { type: 'keyword', ignore_above: 512, fields: { text: { type: 'text', analyzer: 'standard' } } }, numericValue: { type: 'double' } } },
+  recordFields: { type: 'nested', properties: { label: { type: 'keyword' }, value: { type: 'keyword', ignore_above: 512, fields: { text: { type: 'text', analyzer: 'standard' }, literal: { type: 'wildcard' } } }, numericValue: { type: 'double' } } },
   diagnosisFilters: { type: 'nested', properties: {
     name: { type: 'keyword' }, diagnosedOn: { type: 'date', format: 'strict_date' },
     codingSystem: { type: 'keyword' }, code: { type: 'keyword' },

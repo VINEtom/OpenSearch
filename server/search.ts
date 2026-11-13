@@ -50,6 +50,10 @@ const textFields = {
   patientProfile: { boost: 2, highlight: { fragment_size: 120, number_of_fragments: 1 } },
 };
 
+function literalSubstringPattern(value: string) {
+  return '*' + value.replace(/[\\*?]/gu, '\\$&') + '*';
+}
+
 export function buildSearchQuery(params: NormalizedSearch, openMarker: string, closeMarker: string, patientFilters?: PatientSearchFilters, simulationFilters?: SimulationSearchFilters, clue?: string, sex?: string, catalogConditions?: PatientCatalogCondition[], ageFilter?: PatientAgeFilter, diagnosisTitle?: string) {
   const fields = Object.entries(textFields);
   const singleHan = /^\p{Script=Han}$/u.test(params.q);
@@ -96,7 +100,18 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
         ...(simulationFilters.imagingModality ? [{ term: { imagingModality: simulationFilters.imagingModality } }] : []),
         ...(simulationFilters.localizationSite ? [{ term: { localizationSites: simulationFilters.localizationSite } }] : []),
         ...(simulationFilters.fields ?? []).map(({ label, operator, value, numeric }, index) => {
-          const predicate = operator === 'contains' ? { match_phrase: { 'recordFields.value.text': value } }
+          const pattern = operator === 'contains' ? literalSubstringPattern(value) : undefined;
+          const predicate = pattern !== undefined ? { bool: {
+            minimum_should_match: 1,
+            should: [
+              { wildcard: { 'recordFields.value.literal': { value: pattern } } },
+              { wildcard: { 'recordFields.value': { value: pattern } } },
+              { bool: {
+                must_not: [{ exists: { field: 'recordFields.value.literal' } }, { exists: { field: 'recordFields.value' } }],
+                filter: [{ match_phrase: { 'recordFields.value.text': value } }],
+              } },
+            ],
+          } }
             : operator !== 'eq' ? { range: { 'recordFields.numericValue': { [operator]: Number(value) } } }
             : numeric ? { term: { 'recordFields.numericValue': Number(value) } }
             : { term: { 'recordFields.value': value } };
@@ -300,7 +315,7 @@ export function assertCompleteResponse(response: Pick<EngineResponse, 'timed_out
 
 async function hasKeywordEvidence(index: string, params: NormalizedSearch) {
   const value = params.q;
-  const pattern = '*' + value.replace(/[\\*?]/gu, '\\$&') + '*';
+  const pattern = literalSubstringPattern(value);
   const query = { bool: {
     filter: [
       ...(params.scope === 'patient' ? [{ term: { patientId: params.patientId } }] : []),
@@ -340,7 +355,7 @@ async function completeIndexedValue(index: string, query: string, fragment: stri
       query: { term: { [owner.field]: owner.value } },
       aggs: { fields: { nested: { path }, aggs: { matching: { filter: { bool: { filter: [
         { term: { [path + '.label']: label } },
-        contains ? { wildcard: { [path + '.value']: { value: '*' + fragment.replace(/[\\*?]/gu, '\\$&') + '*' } } }
+        contains ? { wildcard: { [path + '.value']: { value: literalSubstringPattern(fragment) } } }
           : { terms: { [path + '.value']: [...variants] } },
       ] } }, aggs: { values: { terms: { field: path + '.value', size: contains ? 4096 : variants.size } } } } } } },
     });

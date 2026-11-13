@@ -27,6 +27,12 @@ Compose 会启动本机 PostgreSQL（54329）和 OpenSearch（9207）。已有�
 - **用虚构数据开发。** 保持 `.env` 中的 `SOURCE_MODE=demo`。在新建的空库中依次运行 `npm run db:init`、`npm run db:seed`、`npm run sync`。
 - **连接开发环境的 PMS 和 EMR。** 在 `.env` 设置 `SOURCE_MODE=real`，填入 `REAL_PGHOST`、`REAL_PGPORT`、`REAL_PGUSER`、`REAL_PGPASSWORD`、`REAL_PMS_DATABASE` 和 `REAL_EMR_DATABASE`。使用能读两个开发库的账号，执行 `npm run sync`。
 
+### 更新单据字段内搜索索引
+
+拉取包含字面匹配的代码后，使用上面与本机数据源对应的配置执行 `npm run sync`。同步会创建新批次，校验记录后再切换本机索引别名。新批次会索引单据字段的连续原文，包括超过 512 字符的正文。只重启服务时，旧批次中的长字段仍按短语匹配。
+
+同步完成后打开索引同步状态，确认批次已更新，再用本机有数据的单据验证字段筛选和高亮。若使用与本次验收相同的快照，「找中止原因包含ddd的计划申请单」应返回 3 条，包括字段值为 `dddd` 的记录。
+
 运行 `npm run dev` 后打开 [搜索网页](http://127.0.0.1:8107)，也可以查看 [API 健康状态](http://127.0.0.1:4107/api/prototype/health)和[索引同步状态](http://127.0.0.1:4107/api/prototype/index-status)。基础搜索和同步可以在 `.env` 设置 `SEARCH_MODELS=off`，无需 Python。
 
 ## 3. 启用 BERT 和 BGE

@@ -201,3 +201,10 @@ test('all configured simulation fields can be queried by name', () => {
   assert.equal(parseSimulationFieldQuery('技术为示例且未知条件'), 'invalid');
   assert.equal(parseSimulationFieldQuery('屏气'), undefined);
 });
+
+test('field contains escapes wildcard characters in the user value', () => {
+  const query = buildSearchQuery(validateSearchParams({ q: '查找单据' }), 'OPEN', 'CLOSE',
+    undefined, { documentType: '计划申请单', fields: [{ label: '中止原因', operator: 'contains', value: 'a*?\\b' }] });
+  assert.match(JSON.stringify(query), /recordFields\.value\.literal/);
+  assert.ok(JSON.stringify(query).includes(JSON.stringify(String.raw`*a\*\?\\b*`)));
+});
