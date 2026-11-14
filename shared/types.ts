@@ -98,6 +98,7 @@ export interface SimulationFieldCondition {
 }
 export interface SimulationSearchFilters {
   documentType?: string;
+  documentTypes?: string[];
   fields?: SimulationFieldCondition[];
   imagingModality?: string;
   localizationSite?: string;

@@ -1,7 +1,8 @@
+import { patientSearchCatalog } from '../shared/patient-search-catalog.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { config } from './config.js';
-import { catalogs, type Filter } from './document-field-query.js';
+import { catalogs, fieldOwners, type Filter } from './document-field-query.js';
 import { joinSingleValueFragments, ModelWorker } from './search-models.js';
 
 type Labels = Record<string, { kind: string; label: string; operators: string[] }>;
@@ -37,6 +38,45 @@ const normalize = (value: string) => value.normalize('NFKC').trim();
 type VerifyDocumentSplit = (type: string, label: string, value: string) => Promise<string | undefined>;
 
 export async function predictDocumentCondition(query: string, verifySplit?: VerifyDocumentSplit) {
+  const text = normalize(query);
+  const explicitType = Object.keys(catalogs).some(type => text.includes(type));
+  if (explicitType) return predictScopedCondition(query, verifySplit);
+
+  const names = [...fieldOwners.keys()].filter(label => text.includes(label));
+  const fields = names.filter(label => !names.some(other => other !== label && other.includes(label)));
+  if (fields.length !== 1) return undefined;
+  const [label] = fields;
+  if (patientSearchCatalog.some(field => field.label !== label && field.label.includes(label) && text.includes(field.label))) {
+    return undefined;
+  }
+  const owners = fieldOwners.get(label) ?? [];
+  let condition: Filter['conditions'][number] | undefined;
+  for (const type of owners) {
+    // Supply the catalogue type as model context, preserving the user's query text.
+    const prediction = await predictScopedCondition(`${type} ${query}`, verifySplit);
+    if (prediction === 'unavailable') return prediction;
+    if (!prediction || prediction === 'review') continue;
+    const [parsed] = prediction.conditions;
+    if (parsed.label !== label || !text.includes(normalize(parsed.value))) continue;
+    if (condition && (condition.operator !== parsed.operator || condition.value !== parsed.value)) return 'review';
+    condition = parsed;
+  }
+  if (!condition) return undefined;
+  const { operator, value } = condition;
+  const types = owners.filter(type => {
+    const spec = catalogs[type].find(field => field.label === label)!;
+    return supportsOperator(spec, operator) && (!spec.enum || Object.values(spec.enum).includes(value))
+      && (!spec.boolean || ['是', '否', '1', '0'].includes(value));
+  });
+  return types.length ? { types, conditions: [condition] } : 'review';
+}
+
+function supportsOperator(spec: { text?: boolean; number?: boolean }, operator: string) {
+  return operator === 'eq' || (operator === 'contains' && spec.text)
+    || (spec.number && ['lt', 'lte', 'gt', 'gte'].includes(operator));
+}
+
+async function predictScopedCondition(query: string, verifySplit?: VerifyDocumentSplit) {
   const primary = await parseDocumentBertCondition(query, loadModel, verifySplit);
   const fallback = process.env.SEARCH_DOCUMENT_BERT_FALLBACK_MODEL_DIR;
   if (primary !== 'review' || !fallback || fallback === config.documentBertDir) return primary;
@@ -96,8 +136,7 @@ Promise<Filter | 'review' | 'unavailable' | undefined> {
   if (!validScope) return 'review';
   const completeNumber = !spec.number || (operator === 'eq' && !Number.isFinite(Number(value))) || (Number.isFinite(Number(value)) &&
     (text.match(/[+-]?(?:\d+(?:\.\d+)?|\.\d+)/gu) ?? []).some(number => number === value));
-  const operatorAllowed = operator === 'eq' || (operator === 'contains' && spec.text)
-    || (spec.number && ['lt', 'lte', 'gt', 'gte'].includes(operator));
+  const operatorAllowed = supportsOperator(spec, operator);
   if (extra !== undefined || definition?.kind !== type || definition.label !== spec.label
       || !Array.isArray(definition.operators) || !definition.operators.includes(operator)
       || !operatorAllowed || !value || !text.includes(value)

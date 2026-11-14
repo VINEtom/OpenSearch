@@ -176,6 +176,8 @@ openspec validate --all --strict
 | [需求说明](docs/requirements.md) | 搜索范围、结果展示、异常及验收结果 |
 | [全局搜索说明](docs/search-guide.md) | 搜索流程、OpenSearch 概念、字段设计和扩展工作量 |
 | [可搜索字段](docs/search-fields.md) | 当前能搜到的字段及匹配方式 |
+| [单条件和多条件查询清单](docs/search-condition-catalog.md) | 完整筛选字段、可组合的查询条件及当前边界 |
+| [搜索测试报告](docs/search-query-test-report.md) | 跨单据字段筛选和姓名关键词的浏览器验收 |
 | [设计说明](docs/design.md) | 原型架构、数据流、查询设计、同步及详情读取 |
 | [集成环境接入守则](docs/integration-guidelines.md) | 真实数据源、字段与权限、索引发布及验收 |
 | [表结构与索引](docs/data-model.md) | 三个数据库、五张业务表、字段约束及记录搜索索引 |

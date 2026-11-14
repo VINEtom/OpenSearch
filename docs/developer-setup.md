@@ -143,7 +143,7 @@ SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnos
 
 构建执行 `npm run build`。保留同一份 `web/dist` 和对应的服务端源码，启动时可用 `WEB_DIST_DIR` 指向构建产物。集成环境使用独立的 `OPENSEARCH_INDEX_ALIAS` 和 `RUNTIME_DIR`。
 
-明确单条件模型暂不可用时，接口返回 `503 DOCUMENT_MODEL_UNAVAILABLE`，页面提示稍后重试。多个明确字段或模型结果未通过校验时，返回 `400 INVALID_QUERY`。省略单据类型时，单据模型不执行字段筛选。
+明确单条件模型暂不可用时，接口返回 `503 DOCUMENT_MODEL_UNAVAILABLE`，页面提示稍后重试。多个明确字段或模型结果未通过校验时，返回 `400 INVALID_QUERY`。省略单据类型时，单据模型按目录校验字段并查询适用单据。
 
 患者资料和单据搜索由模型提取明确单条件。配置 `SEARCH_DIAGNOSIS_BERT_MODEL_DIR` 指向补训后的诊断权重目录，可在本地验证按确诊日期和索引中的诊断名称找患者。
 

@@ -298,7 +298,7 @@ export default function SearchPage() {
 
         {result?.simulationFilters && <div className="patient-filters" role="group" aria-label="识别出的筛选条件">
           <strong>识别出的筛选条件</strong>
-          <span>单据类型 · {result.simulationFilters.documentType ?? '定位申请单'}</span>
+          <span>单据类型 · {result.simulationFilters.documentTypes?.join('、') ?? result.simulationFilters.documentType ?? '定位申请单'}</span>
           {result.simulationBertConfirmed && <span>BERT 已核对</span>}
           {result.simulationFilters.imagingModality && <span>成像方式 · {result.simulationFilters.imagingModality}</span>}
           {result.simulationFilters.localizationSite && <span>定位部位 · {result.simulationFilters.localizationSite}</span>}

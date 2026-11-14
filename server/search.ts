@@ -100,8 +100,10 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
       ...resultWindow,
       query: { bool: { filter: [
         ...filters,
-        ...(!simulationFilters.documentType ? [{ term: { recordType: 'document' } }] : []),
-        { term: { 'documentType.keyword': simulationFilters.documentType ?? '定位申请单' } },
+        ...(!simulationFilters.documentType && !simulationFilters.documentTypes ? [{ term: { recordType: 'document' } }] : []),
+        simulationFilters.documentTypes
+          ? { terms: { 'documentType.keyword': simulationFilters.documentTypes } }
+          : { term: { 'documentType.keyword': simulationFilters.documentType ?? '定位申请单' } },
         ...(simulationFilters.imagingModality ? [{ term: { imagingModality: simulationFilters.imagingModality } }] : []),
         ...(simulationFilters.localizationSite ? [{ term: { localizationSites: simulationFilters.localizationSite } }] : []),
         ...(simulationFilters.fields ?? []).map(({ label, operator, value, numeric }, index) => {
@@ -120,8 +122,21 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
             : operator !== 'eq' ? { range: { 'recordFields.numericValue': { [operator]: Number(value) } } }
             : numeric ? { term: { 'recordFields.numericValue': Number(value) } }
             : { term: { 'recordFields.value': value } };
-          return { nested: { path: 'recordFields', query: { bool: { filter: [{ term: { 'recordFields.label': label } }, predicate] } },
-            inner_hits: { name: `simulationField${index}`, size: 3 } } };
+          const nestedMatch = (valueQuery: object, name: string) => ({
+            nested: { path: 'recordFields', query: { bool: { filter: [{ term: { 'recordFields.label': label } }, valueQuery] } },
+              inner_hits: { name, size: 3 } },
+          });
+          const types = simulationFilters.documentTypes;
+          if (types && operator === 'eq' && Number.isFinite(Number(value))) {
+            const numericTypes = types.filter(type => documentNumericLabels.get(type)?.has(label));
+            const textTypes = types.filter(type => !numericTypes.includes(type));
+            const branches = [[numericTypes, { term: { 'recordFields.numericValue': Number(value) } }],
+              [textTypes, { term: { 'recordFields.value': value } }]] as const;
+            return { bool: { minimum_should_match: 1, should: branches.flatMap(([categories, query], branch) =>
+              categories.length ? [{ bool: { filter: [{ terms: { 'documentType.keyword': categories } },
+                nestedMatch(query, `simulationField${index}-${branch}`)] } }] : []) } };
+          }
+          return nestedMatch(predicate, `simulationField${index}`);
         }),
       ], ...(clue ? { should: [{ match: { bodyText: clue } }] } : {}) } },
       sort: [...(clue ? [{ _score: 'desc' }] : []), { updatedAt: 'desc' }, { id: 'asc' }],
@@ -392,8 +407,9 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     if (scoped === 'unavailable') throw new AppError('DOCUMENT_MODEL_UNAVAILABLE', '单据筛选暂不可用，请稍后重试。', 503);
     if (scoped === 'review') throw new AppError('INVALID_QUERY', '请明确单据类型，并填写一个字段筛选条件。');
     const simulationFilters: SimulationSearchFilters | undefined = scoped ? {
-      documentType: scoped.type,
+      ...('types' in scoped ? { documentTypes: scoped.types } : { documentType: scoped.type }),
       fields: await Promise.all(scoped.conditions.map(async condition => {
+        if ('types' in scoped) return condition;
         const numeric = documentNumericLabels.get(scoped.type)?.has(condition.label)
           && (condition.operator !== 'eq' || Number.isFinite(Number(condition.value)));
         const value = (condition.operator === 'eq' || condition.operator === 'contains') && !numeric && batch.meta.supportsDocumentFieldConditions
@@ -521,7 +537,9 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
       }
       if (simulationFilters?.fields) {
         for (const [index, condition] of simulationFilters.fields.entries()) {
-          for (const inner of hit.inner_hits?.[`simulationField${index}`]?.hits.hits ?? []) {
+          const name = `simulationField${index}`;
+          const matches = [name, `${name}-0`, `${name}-1`].flatMap(key => hit.inner_hits?.[key]?.hits.hits ?? []);
+          for (const inner of matches) {
             const value = inner._source?.value;
             if (!value || matchedFields.some(match => match.label === condition.label && match.text === value)) continue;
             const match = condition.operator === 'contains' ? matchedPatientFields(condition.value, [{ label: condition.label, value }])[0] : undefined;
