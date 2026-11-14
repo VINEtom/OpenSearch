@@ -402,7 +402,9 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     let scoped = config.documentBertDir && params.source !== 'pms' && params.source !== 'rvs'
       ? await predictDocumentCondition(params.q, (type, label, fragment) =>
         completeIndexedValue(batch.index, params.q, fragment, label,
-          { field: 'documentType.keyword', value: type }, 'recordFields', true)) : undefined;
+          { field: 'documentType.keyword', value: type }, 'recordFields', true), (type, label, value, contains) =>
+        completeIndexedValue(batch.index, params.q, value, label,
+          { field: 'documentType.keyword', value: type }, 'recordFields', contains)) : undefined;
     if (scoped && await keywordMatch()) scoped = undefined;
     if (scoped === 'unavailable') throw new AppError('DOCUMENT_MODEL_UNAVAILABLE', '单据筛选暂不可用，请稍后重试。', 503);
     if (scoped === 'review') throw new AppError('INVALID_QUERY', '请明确单据类型，并填写一个字段筛选条件。');
@@ -426,7 +428,8 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         elapsedMs: Math.round(performance.now() - started),
       };
     }
-    const canUseCatalog = params.source !== 'emr' && params.source !== 'rvs';
+    const fieldNameKeyword = fieldOwners.has(params.q.normalize('NFKC').trim());
+    const canUseCatalog = !fieldNameKeyword && params.source !== 'emr' && params.source !== 'rvs';
     let diagnosis = !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
     if (diagnosis && diagnosis !== 'keyword' && await keywordMatch()) diagnosis = 'keyword';
     const diagnosisTitle = diagnosis && typeof diagnosis === 'object' && 'diagnosisTitle' in diagnosis ? diagnosis.diagnosisTitle : undefined;

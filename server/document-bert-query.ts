@@ -37,15 +37,67 @@ const normalize = (value: string) => value.normalize('NFKC').trim();
 
 type VerifyDocumentSplit = (type: string, label: string, value: string) => Promise<string | undefined>;
 
-export async function predictDocumentCondition(query: string, verifySplit?: VerifyDocumentSplit) {
+type VerifyDocumentValue = (type: string, label: string, value: string, contains: boolean) => Promise<string | undefined>;
+
+export async function predictDocumentCondition(query: string, verifySplit?: VerifyDocumentSplit, verifyValue?: VerifyDocumentValue) {
+  const scoped = await predictDocumentCandidate(query, verifySplit, verifyValue);
+  if (scoped === 'unavailable' || (scoped && typeof scoped === 'object' && 'types' in scoped)) return scoped;
+
+  const original = scoped && typeof scoped === 'object' ? scoped.conditions[0] : undefined;
+  if (original && scoped && typeof scoped === 'object') {
+    const spec = catalogs[scoped.type].find(field => field.label === original.label);
+    if ((fieldOwners.get(original.label)?.length ?? 0) < 2 ||
+      (original.operator !== 'contains' && (original.operator !== 'eq' || spec?.number || spec?.enum || spec?.boolean))) return scoped;
+  }
+
+  // Retry the model with the scope mention masked. The original scope still controls retrieval.
+  const text = normalize(query);
+  const types = Object.keys(catalogs).filter(type => text.includes(type))
+    .sort((a, b) => text.lastIndexOf(b) - text.lastIndexOf(a));
+  for (const type of types) {
+    const at = scoped && typeof scoped === 'object' && scoped.type !== type ? -1 : text.lastIndexOf(type);
+    if (at < 0) continue;
+    const remainder = (text.slice(0, at) + ' ' + text.slice(at + type.length)).trim();
+    const candidate = await predictDocumentCandidate(remainder, verifySplit, verifyValue);
+    if (!candidate || typeof candidate !== 'object') continue;
+    const [condition] = candidate.conditions;
+    if (!('types' in candidate) && verifyValue) {
+      for (const owner of fieldOwners.get(condition.label) ?? []) {
+        const value = await verifyValue(owner, condition.label, condition.value, condition.operator === 'contains');
+        if (value && value.length > condition.value.length && remainder.includes(normalize(value))) condition.value = value;
+      }
+    }
+    const spec = catalogs[type].find(field => field.label === condition.label);
+    if (!spec || !supportsOperator(spec, condition.operator)
+      || (spec.enum && !Object.values(spec.enum).includes(condition.value))
+      || (spec.boolean && !['是', '否', '1', '0'].includes(condition.value))) continue;
+    // Other type mentions must belong to the verified value for scope to be unambiguous.
+    const withoutValue = remainder.replace(normalize(condition.value), ' ');
+    if (withoutValue === remainder || Object.keys(catalogs).some(name => withoutValue.includes(name))) continue;
+    if (original && (original.label !== condition.label || original.operator !== condition.operator
+        || !condition.value.includes(original.value) || condition.value === original.value)) continue;
+    if (original) {
+      const owners = fieldOwners.get(condition.label) ?? [];
+      const verified = await Promise.all(owners.map(owner =>
+        verifyValue?.(owner, condition.label, condition.value, condition.operator === 'contains')));
+      if (!verified.includes(condition.value)) continue;
+    }
+    return { type, conditions: [condition] };
+  }
+  return scoped;
+}
+
+async function predictDocumentCandidate(query: string, verifySplit?: VerifyDocumentSplit, verifyValue?: VerifyDocumentValue) {
   const text = normalize(query);
   const explicitType = Object.keys(catalogs).some(type => text.includes(type));
-  if (explicitType) return predictScopedCondition(query, verifySplit);
+  const scoped = explicitType ? await predictScopedCondition(query, verifySplit) : undefined;
+  if (scoped === 'unavailable' || (scoped && typeof scoped === 'object')) return scoped;
 
   const names = [...fieldOwners.keys()].filter(label => text.includes(label));
   const fields = names.filter(label => !names.some(other => other !== label && other.includes(label)));
-  if (fields.length !== 1) return undefined;
+  if (fields.length !== 1) return scoped;
   const [label] = fields;
+  if (text === label) return undefined;
   if (patientSearchCatalog.some(field => field.label !== label && field.label.includes(label) && text.includes(field.label))) {
     return undefined;
   }
@@ -53,15 +105,25 @@ export async function predictDocumentCondition(query: string, verifySplit?: Veri
   let condition: Filter['conditions'][number] | undefined;
   for (const type of owners) {
     // Supply the catalogue type as model context, preserving the user's query text.
-    const prediction = await predictScopedCondition(`${type} ${query}`, verifySplit);
+    let prediction = await predictScopedCondition(`${type} ${query}`, verifySplit);
+    if (!prediction || prediction === 'review') prediction = await predictScopedCondition(`${query}的${type}`, verifySplit);
     if (prediction === 'unavailable') return prediction;
     if (!prediction || prediction === 'review') continue;
     const [parsed] = prediction.conditions;
     if (parsed.label !== label || !text.includes(normalize(parsed.value))) continue;
-    if (condition && (condition.operator !== parsed.operator || condition.value !== parsed.value)) return 'review';
+    if (parsed.operator === 'eq' || parsed.operator === 'contains') {
+      parsed.value = await verifyValue?.(type, label, parsed.value, parsed.operator === 'contains') ?? parsed.value;
+    }
+    if (explicitType) {
+      const outside = text.replace(normalize(parsed.value), ' ');
+      if (Object.keys(catalogs).some(name => outside.includes(name))) continue;
+    }
+    if (condition && condition.operator !== parsed.operator) return 'review';
+    if (condition && condition.value.includes(parsed.value)) continue;
+    if (condition && !parsed.value.includes(condition.value)) return 'review';
     condition = parsed;
   }
-  if (!condition) return undefined;
+  if (!condition) return scoped;
   const { operator, value } = condition;
   const types = owners.filter(type => {
     const spec = catalogs[type].find(field => field.label === label)!;
