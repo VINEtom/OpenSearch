@@ -22,5 +22,6 @@ export const recordProperties = {
   diagnosisIds: { type: 'keyword' }, planRequestId: { type: 'keyword' }, sourceDocumentId: { type: 'keyword' },
   confirmationStatus: { type: 'keyword' }, planStatus: { type: 'keyword' },
   documentType: { type: 'text', analyzer: 'cjk', fields: { keyword: { type: 'keyword' }, han } },
+  courseId: { type: 'keyword' }, prescriptionId: { type: 'keyword' },
   codeSystem: { type: 'keyword' }, codeVersion: { type: 'keyword' }, code: { type: 'keyword' }, missingFields: { type: 'keyword' },
 };

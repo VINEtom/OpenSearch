@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { IndexStatus, RecordDocument, SearchHit, SearchParams, SearchResponse, SearchType, SourceDefect } from '../../../shared/types';
 import DetailView, { type DetailFrame, type DetailTarget } from '../components/DetailView';
 import { errorInfo, postApi, readApi, type ErrorInfo } from '../lib/api';
+import { openPortalPatient } from '../lib/portal-jump';
 import { categoryLabel, CONFIRM_LABELS, displayTime, Highlight, Icon, SEARCH_CATEGORIES, SEX_LABELS, TYPE_LABELS } from '../lib/presentation';
 
 interface PatientContext { id: string; name: string; number: string }
@@ -41,17 +42,22 @@ function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: 
   const kindLabel = (hit.recordType === 'document' || hit.recordType === 'plan_request') && hit.documentType ? hit.documentType : TYPE_LABELS[hit.recordType];
   const titleMatch = hit.matchedFields.find((field) => field.field === 'title');
   const exact = [hit.radiotherapyNo, hit.recordNo, hit.code].some((value) => value != null && value.toLocaleLowerCase() === query.toLocaleLowerCase());
+  const portalJump = hit.jumpUrl || null;
+  const patientPortal = hit.recordType === 'patient' ? portalJump : null;
+  const title = titleMatch ? <Highlight text={hit.title} ranges={titleMatch.text === hit.title ? titleMatch.ranges : []} /> : hit.title;
   return <article className="result-card">
     <div className={`result-icon ${hit.recordType}`}><Icon name={hit.recordType} size={22} /></div>
     <div className="result-main">
-      <div className="result-title-row"><button className="result-title" onClick={onOpen}>{titleMatch ? <Highlight text={hit.title} ranges={titleMatch.text === hit.title ? titleMatch.ranges : []} /> : hit.title}</button><span className={`type-badge ${hit.recordType}`}>{kindLabel}</span><span className="source-label">{hit.source.toUpperCase()}</span>{exact && <span className="exact-badge">编号精确匹配</span>}</div>
-      <div className="result-meta"><button className="patient-link" onClick={onPatient}><Icon name="patient" size={14} />{hit.patientName}</button><span>放疗号 <b className="mono">{hit.radiotherapyNo}</b></span>{hit.recordType === 'patient' && <><span>{SEX_LABELS[hit.sex] || hit.sex}</span><span>出生日期 {hit.birthDate || '未知'}</span></>}{hit.recordNo && <span>{hit.recordType === 'plan_request' ? '申请单号' : '计划编号'} <b className="mono">{hit.recordNo}</b></span>}{hit.confirmationStatus && <span className={`clinical-status ${hit.confirmationStatus}`}>{CONFIRM_LABELS[hit.confirmationStatus] || hit.confirmationStatus}</span>}{hit.planStatus && <span>计划状态：{hit.planStatus}</span>}{hit.recordType !== 'patient' && <span>{hit.businessDate || '业务日期未提供'}</span>}</div>
+      <div className="result-title-row">{portalJump ? <button type="button" className="result-title" onClick={() => openPortalPatient(portalJump)}>{title}</button> : <button type="button" className="result-title" onClick={onOpen}>{title}</button>}<span className={`type-badge ${hit.recordType}`}>{kindLabel}</span><span className="source-label">{hit.source.toUpperCase()}</span>{exact && <span className="exact-badge">编号精确匹配</span>}</div>
+      <div className="result-meta">{patientPortal ? <button type="button" className="patient-link" onClick={() => openPortalPatient(patientPortal)}><Icon name="patient" size={14} />{hit.patientName}</button> : <button type="button" className="patient-link" onClick={onPatient}><Icon name="patient" size={14} />{hit.patientName}</button>}<span>放疗号 <b className="mono">{hit.radiotherapyNo}</b></span>{hit.recordType === 'patient' && <><span>{SEX_LABELS[hit.sex] || hit.sex}</span><span>出生日期 {hit.birthDate || '未知'}</span></>}{hit.recordNo && <span>{hit.recordType === 'plan_request' ? '申请单号' : '计划编号'} <b className="mono">{hit.recordNo}</b></span>}{hit.confirmationStatus && <span className={`clinical-status ${hit.confirmationStatus}`}>{CONFIRM_LABELS[hit.confirmationStatus] || hit.confirmationStatus}</span>}{hit.planStatus && <span>计划状态：{hit.planStatus}</span>}{hit.recordType !== 'patient' && <span>{hit.businessDate || '业务日期未提供'}</span>}</div>
       {hit.code && <div className="result-extra">诊断编码：{[hit.codeSystem, hit.codeVersion].filter(Boolean).join(' ')}{(hit.codeSystem || hit.codeVersion) && ' · '}<span className="mono">{hit.code}</span></div>}
       {(hit.diagnosisIds?.length || hit.planRequestId) && <div className="result-extra">{hit.planRequestId ? '已关联来源申请单' : '已关联具体诊断'}</div>}
       {hit.semanticPassage && <div className="match-line"><span className="match-label">相关正文</span><p>{hit.semanticPassage}</p></div>}
       <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">{field.label}：</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
     </div>
-    <button className="result-open" onClick={onOpen} aria-label={`查看${kindLabel}详情：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>
+    {portalJump
+      ? <button type="button" className="result-open" onClick={() => openPortalPatient(portalJump)} aria-label={hit.recordType === 'patient' ? `查看患者信息：${hit.title}` : `查看${kindLabel}：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>
+      : <button className="result-open" onClick={onOpen} aria-label={`查看${kindLabel}详情：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>}
   </article>;
 }
 

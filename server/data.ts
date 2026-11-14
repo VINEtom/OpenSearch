@@ -303,11 +303,12 @@ function projectRow(type: RecordType, row: Row, patient: PatientRow, batchId: st
     const value = row as PlanRequestRow;
     Object.assign(document, { title: value.title, bodyText: value.body_text, recordNo: value.request_no,
       businessDate: value.requested_on, diagnosisIds: [...value.diagnosis_ids].sort(), prescribedFractions: value.prescribed_fractions,
-      documentType: value.document_type || '计划申请单' });
+      documentType: value.document_type || '计划申请单', courseId: value.course_id ?? null });
   }
   if (type === 'document') {
     const value = row as DocumentRow;
-    Object.assign(document, { title: value.title, bodyText: value.body_text, businessDate: value.document_on, documentType: value.document_type });
+    Object.assign(document, { title: value.title, bodyText: value.body_text, businessDate: value.document_on, documentType: value.document_type,
+      courseId: value.course_id ?? null, prescriptionId: value.prescription_id ?? null });
     if (value.document_type === '定位申请单' && value.simulation_source_fields) {
       document.simulationSourceFields = value.simulation_source_fields;
     }
@@ -439,7 +440,8 @@ export function detailFromSnapshot(snapshot: Snapshot, source: Source, type: Rec
 
 function jumpUrlFor(type: RecordType, row: Row, patientId: string): string | null {
   if (config.sourceMode !== 'real') return null;
-  return fillJump(config.jump, type, type === 'document' ? (row as DocumentRow).document_type : '', {
+  const documentType = 'document_type' in row && row.document_type ? row.document_type : '';
+  return fillJump(config.jump, type, documentType, {
     sourceId: row.id, patientId,
     courseId: 'course_id' in row ? row.course_id : null,
     prescriptionId: 'prescription_id' in row ? row.prescription_id : null,

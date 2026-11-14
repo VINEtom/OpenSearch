@@ -47,6 +47,8 @@ export interface RecordDocument {
   confirmationStatus: string | null;
   planStatus: string | null;
   documentType: string | null;
+  courseId?: string | null;
+  prescriptionId?: string | null;
   codeSystem: string | null;
   codeVersion: string | null;
   code: string | null;
@@ -72,7 +74,7 @@ export interface MatchField {
   text: string;
   ranges: [number, number][];
 }
-export interface SearchHit extends RecordDocument { matchedFields: MatchField[]; semanticPassage?: string }
+export interface SearchHit extends RecordDocument { matchedFields: MatchField[]; semanticPassage?: string; jumpUrl?: string | null }
 export interface SearchParams {
   q: string;
   scope?: 'all' | 'patient';
