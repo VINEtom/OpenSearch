@@ -8,6 +8,7 @@ import { predictDiagnosisFilters, predictPatientConditions, rerankHits } from '.
 import { patientSearchCatalog, patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
 import { documentNumericLabels, fieldOwners } from './document-field-query.js';
+import { fillJump } from './sources/jump.js';
 import { readableText } from './sources/text.js';
 import { predictDocumentCondition } from './document-bert-query.js';
 import { osRequest } from './opensearch.js';
@@ -558,7 +559,13 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
           if (value && value === expected) matchedFields.push({ field: 'recordFields', label: label!, text: value, ranges: [[0, value.length]] });
         }
       }
-      return { ...record, matchedFields };
+      const jumpUrl = config.sourceMode === 'real'
+        ? fillJump(config.jump, record.recordType, record.documentType ?? '', {
+          sourceId: record.sourceId, patientId: record.patientId,
+          courseId: record.courseId, prescriptionId: record.prescriptionId,
+        })
+        : null;
+      return { ...record, matchedFields, ...(jumpUrl ? { jumpUrl } : {}) };
     });
     const textForRanking = !diagnosisTitle && !patientFilters && !simulationFilters && !catalogConditions && params.q.length >= 10
       && !hits.some(hit => hit.matchedFields.some(field => ['radiotherapyNo', 'recordNo', 'code'].includes(field.field)));

@@ -77,6 +77,9 @@ test('demo details have no jump url and real templates fill the saved identifier
   assert.equal(detailFromSnapshot(baseline(), 'emr', 'plan_request', idFor('R1')).jumpUrl, null);
   const url = fillJump({ JUMP_EMR_PLAN_REQUEST: 'http://emr/order?courseId={courseId}&id={sourceId}&patientGuid={patientId}' }, 'plan_request', '', { sourceId: 'r1', patientId: 'p1', courseId: 'c1' });
   assert.equal(url, 'http://emr/order?courseId=c1&id=r1&patientGuid=p1');
+  assert.equal(fillJump({ JUMP_EMR_DIAGNOSIS: 'http://10.8.31.28:10010/emr/diagnosis?source=microApp&vPGuid={patientId}' }, 'diagnosis', '', { sourceId: 'd1', patientId: 'p1' }), 'http://10.8.31.28:10010/emr/diagnosis?source=microApp&vPGuid=p1');
+  assert.equal(fillJump({ JUMP_EMR_DOCUMENT_SIM: 'http://portal/emr/order-list/sim-order?courseId={courseId}&id={sourceId}' }, 'document', '定位申请单', { sourceId: 's1', patientId: 'p1', courseId: 'c1' }), 'http://portal/emr/order-list/sim-order?courseId=c1&id=s1');
+  assert.equal(fillJump({ JUMP_EMR_PLAN_REQUEST_PLAN: 'http://portal/emr/order-list/prescription-order?courseId={courseId}&id={sourceId}' }, 'plan_request', '计划申请单', { sourceId: 'r1', patientId: 'p1', courseId: 'c1' }), 'http://portal/emr/order-list/prescription-order?courseId=c1&id=r1');
   assert.equal(fillJump({}, 'plan_request', '', { sourceId: 'r1', patientId: 'p1' }), null);
 });
 
