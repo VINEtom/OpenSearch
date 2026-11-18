@@ -4,11 +4,11 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import type { PatientCatalogCondition, PatientSearchFilters, SearchHit } from '../shared/types.js';
+import type { PatientAgeFilter, PatientCatalogCondition, PatientSearchFilters, SearchHit } from '../shared/types.js';
 import { patientSearchFieldById } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
 import { diagnosisAliases, diagnosisName, diagnosisValueSet, indexedDiagnosisTerms } from './diagnosis-terminology.js';
-import { diagnosisDateRange } from './patient-query.js';
+import { ageYears, currentPatientDate, diagnosisDateRange } from './patient-query.js';
 
 const workerScript = fileURLToPath(new URL('../scripts/search-model.py', import.meta.url));
 
@@ -96,6 +96,31 @@ const patientBert = new ModelWorker('patient-bert',
   process.env.SEARCH_PATIENT_BERT_MODEL_DIR || path.join(config.runtimeDir, 'patient-bert-pilot/catalog-checkpoint'));
 
 let patientPending: Promise<unknown> = Promise.resolve();
+
+const ageModelDir = process.env.SEARCH_PATIENT_AGE_BERT_MODEL_DIR;
+const ageBert = ageModelDir ? new ModelWorker('patient-bert',
+  process.env.SEARCH_BERT_PYTHON || path.join(config.runtimeDir, 'bert-pilot/venv/bin/python'), ageModelDir) : undefined;
+const ageOperators = new Map<string, PatientAgeFilter['operator']>([
+  ['AGE_GT', '>'], ['AGE_GTE', '>='], ['AGE_LT', '<'], ['AGE_LTE', '<='],
+]);
+let agePending: Promise<unknown> = Promise.resolve();
+
+export async function predictPatientAge(query: string): Promise<PatientAgeFilter | undefined> {
+  if (!ageBert) return undefined;
+  const pending = agePending.then(() => ageBert.predict({ query }));
+  agePending = pending.catch(() => undefined);
+  const prediction = await pending as {
+    intent?: string; confidence?: number; fields?: { field: string; text: string }[];
+  } | undefined;
+  if (prediction?.intent !== 'FILTER1' || (prediction.confidence ?? 0) < 0.9
+    || prediction.fields?.length !== 1) return undefined;
+  const [match] = prediction.fields;
+  const operator = ageOperators.get(match.field);
+  const years = ageYears(match.text);
+  if (!operator || years === undefined) return undefined;
+  return { operator, years, asOf: currentPatientDate() };
+}
+
 
 export function joinSingleValueFragments(query: string, fields: { field: string; text: string }[]) {
   if (fields.length < 2 || fields.some(field => field.field !== fields[0].field || !field.text)) return undefined;

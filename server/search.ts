@@ -4,7 +4,7 @@ import { AppError } from './errors.js';
 import { BATCH_PATTERN, resolveBatch } from './index-state.js';
 import { diagnosisValueSet, nasopharynxValueSet } from './diagnosis-terminology.js';
 import { birthDateRange } from './patient-query.js';
-import { predictDiagnosisFilters, predictPatientConditions, rerankHits } from './search-models.js';
+import { predictDiagnosisFilters, predictPatientAge, predictPatientConditions, rerankHits } from './search-models.js';
 import { patientSearchCatalog, patientSearchFieldById, patientSexLabels } from '../shared/patient-search-catalog.js';
 import { config } from './config.js';
 import { documentNumericLabels, fieldOwners } from './document-field-query.js';
@@ -400,7 +400,9 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const batch = await resolveBatch(params.batchId);
     let keywordEvidence: Promise<boolean> | undefined;
     const keywordMatch = () => keywordEvidence ??= hasKeywordEvidence(batch.index, params);
-    let scoped = config.documentBertDir && params.source !== 'pms' && params.source !== 'rvs'
+    let ageFilter = params.source === 'all' || params.source === 'pms' ? await predictPatientAge(params.q) : undefined;
+    if (ageFilter && await keywordMatch()) ageFilter = undefined;
+    let scoped = !ageFilter && config.documentBertDir && params.source !== 'pms' && params.source !== 'rvs'
       ? await predictDocumentCondition(params.q, (type, label, fragment) =>
         completeIndexedValue(batch.index, params.q, fragment, label,
           { field: 'documentType.keyword', value: type }, 'recordFields', true), (type, label, value, contains) =>
@@ -431,11 +433,11 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     }
     const fieldNameKeyword = fieldOwners.has(params.q.normalize('NFKC').trim());
     const canUseCatalog = !fieldNameKeyword && params.source !== 'emr' && params.source !== 'rvs';
-    let diagnosis = !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
+    let diagnosis = !ageFilter && !simulationFilters && canUseCatalog ? await predictDiagnosisFilters(params.q, batch.index) : undefined;
     if (diagnosis && diagnosis !== 'keyword' && await keywordMatch()) diagnosis = 'keyword';
     const diagnosisTitle = diagnosis && typeof diagnosis === 'object' && 'diagnosisTitle' in diagnosis ? diagnosis.diagnosisTitle : undefined;
     const patientFilters = diagnosis && typeof diagnosis === 'object' && 'diagnosedFrom' in diagnosis ? diagnosis : undefined;
-    let catalogConditions = !simulationFilters && (!diagnosis || diagnosis === 'review') && canUseCatalog
+    let catalogConditions = !ageFilter && !simulationFilters && (!diagnosis || diagnosis === 'review') && canUseCatalog
       ? await predictPatientConditions(params.q, (label, fragment) =>
         completeIndexedValue(batch.index, params.q, fragment, label,
           { field: 'recordType', value: 'patient' }, 'patientFields')) : undefined;
@@ -491,7 +493,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
     const marker = randomUUID();
     const openMarker = `\uE000${marker}\uE001`;
     const closeMarker = `\uE002${marker}\uE003`;
-    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, undefined, undefined, catalogConditions, undefined, diagnosisTitle));
+    const response = await osRequest<EngineResponse>(`/${encodeURIComponent(batch.index)}/_search?allow_partial_search_results=false`, 'POST', buildSearchQuery(params, openMarker, closeMarker, patientFilters, simulationFilters, undefined, undefined, catalogConditions, ageFilter, diagnosisTitle));
     assertCompleteResponse(response);
     const typeCounts = Object.fromEntries(RECORD_TYPES.map(type => [type, 0])) as Record<RecordType, number>;
     for (const bucket of response.aggregations.types.buckets) typeCounts[bucket.key] = bucket.doc_count;
@@ -507,7 +509,7 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         const value = record[field];
         if (value === params.q) matchedFields.push({ field, label: fieldLabel(field, record.recordType), text: value, ranges: [[0, value.length]] });
       }
-      const isKeyword = !diagnosisTitle && !patientFilters && !catalogConditions && !simulationFilters;
+      const isKeyword = !ageFilter && !diagnosisTitle && !patientFilters && !catalogConditions && !simulationFilters;
       if (isKeyword && record.recordType === 'patient' && record.sex && record.sex === keywordSexCode(params.q)) {
         const text = patientSexLabels[record.sex] ?? record.sex;
         matchedFields.push({ field: 'sex', label: '性别', text, ranges: [[0, text.length]] });
@@ -567,10 +569,10 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         : null;
       return { ...record, matchedFields, ...(jumpUrl ? { jumpUrl } : {}) };
     });
-    const textForRanking = !diagnosisTitle && !patientFilters && !simulationFilters && !catalogConditions && params.q.length >= 10
+    const textForRanking = !ageFilter && !diagnosisTitle && !patientFilters && !simulationFilters && !catalogConditions && params.q.length >= 10
       && !hits.some(hit => hit.matchedFields.some(field => ['radiotherapyNo', 'recordNo', 'code'].includes(field.field)));
     const rankedHits = textForRanking ? await rerankHits(params.q, hits) : hits;
-    return { ...params, ...(patientFilters ? { patientFilters } : {}), ...(catalogConditions ? { patientCatalogConditions: catalogConditions } : {}),
+    return { ...params, ...(ageFilter ? { ageFilter } : {}), ...(patientFilters ? { patientFilters } : {}), ...(catalogConditions ? { patientCatalogConditions: catalogConditions } : {}),
       ...(simulationFilters ? { simulationFilters } : {}), pageSize: 20, total: response.hits.total.value,
       typeCounts, categoryCounts, batchId: batch.meta.batchId, syncedAt: batch.meta.syncedAt, hits: rankedHits,
       elapsedMs: Math.round(performance.now() - started) };

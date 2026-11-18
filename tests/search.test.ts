@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { baseline } from '../fixtures/samples.js';
 import { patientSearchCatalog } from '../shared/patient-search-catalog.js';
 import { projectRecords } from '../server/data.js';
+import { ageYears, currentPatientDate } from '../server/patient-query.js';
 import { birthDateRange, parseAgeQuery, parsePatientQuery, parseSexQuery, splitAgeQuery } from '../tests/support/legacy/patient-query.js';
 import { htmlToText, readableText } from '../server/sources/text.js';
 import { assertCompleteResponse, buildSearchQuery, matchedPatientConditions, matchedPatientFields, parseMarkedHighlight, presentMarkedFragment, validateSearchParams } from '../server/search.js';
@@ -15,6 +16,19 @@ test('rejects unsupported, duplicated, mismatched and malformed query inputs', (
     { q: '屏气', scope: 'patient' }, { q: '屏气', source: 'pms', type: 'document' },
     { q: '屏气', page: 'NaN' }, { q: '屏气', page: -1 }, { q: '屏气', batchId: '../other' },
   ]) assert.throws(() => validateSearchParams(input));
+});
+test('age values normalize before the production query applies a completed-year boundary', () => {
+  assert.equal(ageYears('３０'), 30);
+  assert.equal(ageYears('三十'), 30);
+  assert.equal(ageYears('三十岁'), undefined);
+  assert.equal(currentPatientDate(new Date('2026-11-17T16:00:00Z')), '2026-11-18');
+  const params = validateSearchParams({ q: '年龄大于三十岁' });
+  const query = buildSearchQuery(params, 'OPEN', 'CLOSE', undefined, undefined, undefined, undefined,
+    undefined, { operator: '>', years: 30, asOf: '2026-11-18' });
+  assert.deepEqual(query.query.bool.filter, [
+    { term: { recordType: 'patient' } },
+    { range: { birthDate: { lte: '1995-11-18' } } },
+  ]);
 });
 test('leading zero identifiers are retained and scope filters do not include object-type facet selection', () => {
   const params = validateSearchParams({ q: ' 000123 ', source: 'emr', type: 'document' });

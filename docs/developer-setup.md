@@ -153,3 +153,16 @@ SEARCH_DIAGNOSIS_BERT_MODEL_DIR=/abs/path/OpenSearch/.runtime/models/ois-diagnos
 node --import tsx scripts/verify-document-bert-release.ts \
   EDGE_URL SNAPSHOT_URL UNAVAILABLE_URL EDGE_FIXTURES SNAPSHOT_EXPECTED
 ```
+
+### 患者年龄筛选
+
+从 [OIS Patient Age BERT v2](https://github.com/VINEtom/OpenSearch/releases/tag/ois-patient-age-bert-v2) 下载权重，校验 SHA-256 后解压。年龄模型与现有患者字段模型分别配置，共用 `SEARCH_BERT_PYTHON`。
+
+可用发布版患者 BERT 权重和虚构问法重新训练年龄模型。
+
+```sh
+"$SEARCH_BERT_PYTHON" scripts/train-patient-age-bert.py \
+  .runtime/models/ois-patient-bert-v4 .runtime/patient-age-bert-v2
+```
+
+在 `.env` 中把 `SEARCH_PATIENT_AGE_BERT_MODEL_DIR` 指向输出目录的绝对路径，重启服务。用「年龄大于30岁」和「年龄大于三十岁」检查年龄条件。系统以北京时间当日计算周岁，使用现有索引的出生日期字段。
