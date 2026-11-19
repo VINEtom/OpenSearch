@@ -30,6 +30,12 @@ test('age values normalize before the production query applies a completed-year 
     { range: { birthDate: { lte: '1995-11-18' } } },
   ]);
 });
+test('keyword search can match an independent document field label', () => {
+  const query = buildSearchQuery(validateSearchParams({ q: '成像方式' }), 'OPEN', 'CLOSE');
+  assert.ok(query.query.bool.should?.some(clause => JSON.stringify(clause) === JSON.stringify({
+    nested: { path: 'recordFields', score_mode: 'max', query: { term: { 'recordFields.label': '成像方式' } } },
+  })));
+});
 test('leading zero identifiers are retained and scope filters do not include object-type facet selection', () => {
   const params = validateSearchParams({ q: ' 000123 ', source: 'emr', type: 'document' });
   const query = buildSearchQuery(params, 'OPEN', 'CLOSE');

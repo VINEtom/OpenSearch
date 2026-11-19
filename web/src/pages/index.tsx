@@ -53,7 +53,7 @@ function ResultCard({ hit, query, onOpen, onPatient }: { hit: SearchHit; query: 
       {hit.code && <div className="result-extra">诊断编码：{[hit.codeSystem, hit.codeVersion].filter(Boolean).join(' ')}{(hit.codeSystem || hit.codeVersion) && ' · '}<span className="mono">{hit.code}</span></div>}
       {(hit.diagnosisIds?.length || hit.planRequestId) && <div className="result-extra">{hit.planRequestId ? '已关联来源申请单' : '已关联具体诊断'}</div>}
       {hit.semanticPassage && <div className="match-line"><span className="match-label">相关正文</span><p>{hit.semanticPassage}</p></div>}
-      <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">{field.label}：</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
+      <div className="matched-content">{hit.matchedFields.map((field, index) => <div className="match-line" key={`${field.field}-${index}`}><span className="match-label">{field.labelMatched ? <mark>{field.label}</mark> : field.label}：</span><p><Highlight text={field.text} ranges={field.ranges} /></p></div>)}</div>
     </div>
     {portalJump
       ? <button type="button" className="result-open" onClick={() => openPortalPatient(portalJump)} aria-label={hit.recordType === 'patient' ? `查看患者信息：${hit.title}` : `查看${kindLabel}：${hit.title}`}><span>查看详情</span><Icon name="arrow" size={16} /></button>

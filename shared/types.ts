@@ -69,6 +69,7 @@ export interface RecordDocument {
   missingFields: string[];
 }
 export interface MatchField {
+  labelMatched?: boolean;
   field: string;
   label: string;
   text: string;

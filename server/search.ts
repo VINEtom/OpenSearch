@@ -55,6 +55,11 @@ function literalSubstringPattern(value: string) {
   return '*' + value.replace(/[\\*?]/gu, '\\$&') + '*';
 }
 
+function documentFieldNameMatch(query: string) {
+  return { nested: { path: 'recordFields', score_mode: 'max' as const,
+    query: { term: { 'recordFields.label': query.normalize('NFKC') } } } };
+}
+
 function keywordSexCode(query: string) {
   const value = query.toLowerCase();
   return Object.keys(patientSexLabels).find(code => code === value || patientSexLabels[code] === value);
@@ -210,6 +215,7 @@ export function buildSearchQuery(params: NormalizedSearch, openMarker: string, c
         ...['radiotherapyNo', 'recordNo', 'code'].map(field => ({ term: { [field]: { value: params.q, boost: 10 } } })),
         { nested: { path: 'patientFields', score_mode: 'max', query: { term: { 'patientFields.value': { value: params.q, boost: 10 } } } } },
         { nested: { path: 'recordFields', score_mode: 'max', query: { term: { 'recordFields.value': { value: params.q, boost: 10 } } } } },
+        documentFieldNameMatch(params.q),
         { multi_match: { query: params.q, fields: queryFields, type: 'best_fields', operator: 'and' } },
       ],
       minimum_should_match: 1,
@@ -351,6 +357,7 @@ async function hasKeywordEvidence(index: string, params: NormalizedSearch) {
       ...['patientFields', 'recordFields'].map(path => ({
         nested: { path, query: { wildcard: { [path + '.value']: { value: pattern } } } },
       })),
+      documentFieldNameMatch(value),
       ...['bodyText', 'patientProfile'].map(field => ({ match_phrase: { [field]: value } })),
     ],
     minimum_should_match: 1,
@@ -518,6 +525,13 @@ export async function searchRecords(input: SearchParams): Promise<SearchResponse
         for (const field of ['patientFields', 'recordFields'] as const) {
           const exact = record[field]?.filter(entry => entry.value === params.q);
           for (const match of matchedPatientFields(params.q, exact)) matchedFields.push({ ...match, field });
+        }
+        const label = params.q.normalize('NFKC');
+        for (const entry of record.recordFields ?? []) {
+          if (entry.label !== label) continue;
+          const existing = matchedFields.find(match => match.field === 'recordFields' && match.label === label && match.text === entry.value);
+          if (existing) existing.labelMatched = true;
+          else matchedFields.push({ field: 'recordFields', label, text: entry.value, ranges: [], labelMatched: true });
         }
       }
       for (const field of Object.keys(textFields)) {
